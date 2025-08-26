@@ -21,11 +21,14 @@ pub struct FileInfo {
     pub hash: String,
 }
 
-/// IPFS添加响应
+/// IPFS添加响应（Kubo返回字段为PascalCase: Name, Hash, Size）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AddResponse {
+    #[serde(rename = "Name")]
     pub name: String,
+    #[serde(rename = "Hash")]
     pub hash: String,
+    #[serde(rename = "Size")]
     pub size: String,
 }
 

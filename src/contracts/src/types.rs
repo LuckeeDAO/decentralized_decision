@@ -26,6 +26,12 @@ pub enum ExecuteMsg {
     BatchMint {
         recipients: Vec<String>,
     },
+    // NFT带元数据铸造
+    MintWithMetadata {
+        recipient: String,
+        token_uri: Option<String>,
+        extension: Option<serde_json::Value>,
+    },
     SubmitVote {
         session_id: String,
         option_index: u32,
@@ -69,6 +75,20 @@ pub enum ExecuteMsg {
         recipient: String,
         amount: Uint128,
     },
+    // 质押与锁定
+    Stake {
+        amount: Uint128,
+    },
+    Unstake {
+        amount: Uint128,
+    },
+    Lock {
+        amount: Uint128,
+    },
+    Unlock {
+        amount: Uint128,
+    },
+    ClaimReward {},
 }
 
 #[cw_serde]
@@ -96,6 +116,9 @@ pub enum QueryMsg {
     GetNftInfo { token_id: String },
     #[returns(cw721::AllNftInfoResponse<serde_json::Value>)]
     GetAllNftInfo { token_id: String, include_expired: Option<bool> },
+    // 质押状态查询
+    #[returns(StakingInfo)]
+    GetStakingInfo { address: String },
 }
 
 #[cw_serde]
@@ -130,6 +153,15 @@ pub struct TokenInfoResponse {
     pub symbol: String,
     pub decimals: u8,
     pub total_supply: Uint128,
+}
+
+#[cw_serde]
+pub struct StakingInfo {
+    pub address: String,
+    pub staked: Uint128,
+    pub locked: Uint128,
+    pub reward_accrued: Uint128,
+    pub last_update: u64,
 }
 
 #[cw_serde]

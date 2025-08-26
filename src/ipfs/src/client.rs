@@ -63,10 +63,28 @@ impl IpfsClient {
     }
     
     /// 验证CID
-    pub async fn verify_cid(&self, _cid: &str, _data: &[u8]) -> Result<bool, Box<dyn std::error::Error>> {
-        // 这里应该实现实际的CID验证逻辑
-        // 目前返回true作为占位符
-        Ok(true)
+    pub async fn verify_cid(&self, cid: &str, data: &[u8]) -> Result<bool, Box<dyn std::error::Error>> {
+        // 使用 IPFS add 接口的 only-hash 选项计算给定数据的CID而不实际存储
+        // 参考: /api/v0/add?only-hash=true&pin=false
+        let url = format!("{}/api/v0/add?only-hash=true&pin=false", self.base_url);
+
+        let form = reqwest::multipart::Form::new()
+            .part("file", reqwest::multipart::Part::bytes(data.to_vec()));
+
+        let response = self.client
+            .post(&url)
+            .multipart(form)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            return Err(IpfsError::VerificationFailed.into());
+        }
+
+        let add_response: AddResponse = response.json().await?;
+
+        // 简单等值比较（如需支持不同CID版本/编码，可在此做规范化）
+        Ok(add_response.hash == cid)
     }
     
     /// 获取节点信息

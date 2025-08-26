@@ -2,16 +2,42 @@
 
 use cosmwasm_std::{
     entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo,
-    Response, StdResult, Uint128,
+    Response, StdResult, Uint128, Addr,
     testing::mock_env, from_json,
 };
+use cosmwasm_std::StdError;
+use cw_storage_plus::Map;
 use cw20::TokenInfoResponse;
 use cw20_base::{
     contract::{execute as cw20_execute, instantiate as cw20_instantiate, query as cw20_query},
     msg::{ExecuteMsg as Cw20BaseExecuteMsg, InstantiateMsg as Cw20BaseInstantiateMsg, QueryMsg as Cw20BaseQueryMsg},
 };
 
-use crate::types::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::types::{ExecuteMsg, InstantiateMsg, QueryMsg, StakingInfo};
+
+// Staking storage: address -> (staked, locked, reward_accrued, last_update)
+const STAKING: Map<&Addr, (Uint128, Uint128, Uint128, u64)> = Map::new("staking");
+
+fn now(env: &Env) -> u64 { env.block.time.seconds() }
+
+fn accrue_reward(
+    staked: Uint128,
+    reward_accrued: Uint128,
+    last_update: u64,
+    current: u64,
+) -> (Uint128, u64, Uint128) {
+    if current <= last_update { return (reward_accrued, last_update, staked); }
+    let elapsed = current - last_update;
+    // APR basis points env var is not available in contract; use fixed 1500 bps (15%) for demo
+    let apr_bps: u128 = 1500;
+    // reward = staked * apr_bps/10000 * elapsed/31536000
+    let reward = staked.u128()
+        .saturating_mul(apr_bps)
+        .saturating_mul(elapsed as u128)
+        / 10_000u128
+        / 31_536_000u128;
+    (reward_accrued + Uint128::from(reward), current, staked)
+}
 
 #[entry_point]
 pub fn instantiate(
@@ -76,6 +102,11 @@ pub fn execute(
         ExecuteMsg::BatchBurn { amounts } => {
             execute_batch_burn(deps, env, info, amounts)
         }
+        ExecuteMsg::Stake { amount } => execute_stake(deps, env, info, amount),
+        ExecuteMsg::Unstake { amount } => execute_unstake(deps, env, info, amount),
+        ExecuteMsg::Lock { amount } => execute_lock(deps, env, info, amount),
+        ExecuteMsg::Unlock { amount } => execute_unlock(deps, env, info, amount),
+        ExecuteMsg::ClaimReward {} => execute_claim_reward(deps, env, info),
         _ => Ok(Response::new().add_attribute("method", "execute")),
     }
 }
@@ -98,6 +129,10 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::GetAllAccounts { start_after, limit } => {
             let resp = query_all_accounts(deps, start_after, limit)?;
             to_json_binary(&resp)
+        }
+        QueryMsg::GetStakingInfo { address } => {
+            let info = query_staking_info(deps, address)?;
+            to_json_binary(&info)
         }
         _ => to_json_binary(&"Unsupported query"),
     }
@@ -299,6 +334,120 @@ pub fn query_all_accounts(
     let response: Binary = cw20_query(deps, mock_env(), cw20_msg)?;
     let accounts: cw20::AllAccountsResponse = from_json(&response)?;
     Ok(accounts)
+}
+
+fn must_addr(api: &dyn cosmwasm_std::Api, addr: &str) -> Result<Addr, StdError> {
+    api.addr_validate(addr)
+}
+
+pub fn execute_stake(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    amount: Uint128,
+) -> StdResult<Response> {
+    // Transfer tokens from sender to contract itself to represent staking lock-in
+    if amount.is_zero() { return Err(StdError::generic_err("amount must be > 0")); }
+    // First update staking record
+    let addr = info.sender.clone();
+    let key = addr.clone();
+    let (mut staked, locked, mut reward, mut last) = STAKING.may_load(deps.storage, &key)?.unwrap_or((Uint128::zero(), Uint128::zero(), Uint128::zero(), now(&env)));
+    let (new_reward, new_last, _) = accrue_reward(staked, reward, last, now(&env));
+    reward = new_reward; last = new_last;
+    staked = staked + amount;
+    STAKING.save(deps.storage, &key, &(staked, locked, reward, last))?;
+    // Then move tokens into contract by transferring to self
+    let contract_addr = env.contract.address.to_string();
+    let res = execute_transfer(deps, env, info, contract_addr, amount)?;
+    Ok(res.add_attribute("staking", "stake").add_attribute("amount", amount))
+}
+
+pub fn execute_unstake(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    amount: Uint128,
+) -> StdResult<Response> {
+    if amount.is_zero() { return Err(StdError::generic_err("amount must be > 0")); }
+    let addr = info.sender.clone();
+    let key = addr.clone();
+    let (mut staked, locked, mut reward, mut last) = STAKING.may_load(deps.storage, &key)?.unwrap_or((Uint128::zero(), Uint128::zero(), Uint128::zero(), now(&env)));
+    let (new_reward, new_last, _) = accrue_reward(staked, reward, last, now(&env));
+    reward = new_reward; last = new_last;
+    if staked < amount { return Err(StdError::generic_err("insufficient staked")); }
+    staked = staked.checked_sub(amount)?;
+    STAKING.save(deps.storage, &key, &(staked, locked, reward, last))?;
+    // transfer tokens back from contract to sender
+    let cw20_msg = Cw20BaseExecuteMsg::Transfer { recipient: addr.to_string(), amount };
+    cw20_execute(deps, env, info, cw20_msg)
+        .map(|r| r.add_attribute("staking", "unstake").add_attribute("amount", amount))
+        .map_err(|e| StdError::generic_err(format!("unstake transfer failed: {}", e)))
+}
+
+pub fn execute_lock(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    amount: Uint128,
+) -> StdResult<Response> {
+    if amount.is_zero() { return Err(StdError::generic_err("amount must be > 0")); }
+    let addr = info.sender.clone();
+    let key = addr.clone();
+    let (mut staked, mut locked, mut reward, mut last) = STAKING.may_load(deps.storage, &key)?.unwrap_or((Uint128::zero(), Uint128::zero(), Uint128::zero(), now(&env)));
+    let (new_reward, new_last, _) = accrue_reward(staked, reward, last, now(&env));
+    reward = new_reward; last = new_last;
+    if staked < amount { return Err(StdError::generic_err("insufficient staked to lock")); }
+    staked = staked.checked_sub(amount)?;
+    locked = locked + amount;
+    STAKING.save(deps.storage, &key, &(staked, locked, reward, last))?;
+    Ok(Response::new().add_attribute("staking", "lock").add_attribute("amount", amount))
+}
+
+pub fn execute_unlock(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    amount: Uint128,
+) -> StdResult<Response> {
+    if amount.is_zero() { return Err(StdError::generic_err("amount must be > 0")); }
+    let addr = info.sender;
+    let key = addr.clone();
+    let (mut staked, mut locked, mut reward, mut last) = STAKING.may_load(deps.storage, &key)?.unwrap_or((Uint128::zero(), Uint128::zero(), Uint128::zero(), now(&env)));
+    let (new_reward, new_last, _) = accrue_reward(staked, reward, last, now(&env));
+    reward = new_reward; last = new_last;
+    if locked < amount { return Err(StdError::generic_err("insufficient locked to unlock")); }
+    locked = locked.checked_sub(amount)?;
+    staked = staked + amount;
+    STAKING.save(deps.storage, &key, &(staked, locked, reward, last))?;
+    Ok(Response::new().add_attribute("staking", "unlock").add_attribute("amount", amount))
+}
+
+pub fn execute_claim_reward(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+) -> StdResult<Response> {
+    let addr = info.sender;
+    let key = addr.clone();
+    let (staked, locked, mut reward, mut last) = STAKING.may_load(deps.storage, &key)?.unwrap_or((Uint128::zero(), Uint128::zero(), Uint128::zero(), now(&env)));
+    let (new_reward, new_last, _) = accrue_reward(staked, reward, last, now(&env));
+    reward = new_reward; last = new_last;
+    if reward.is_zero() {
+        STAKING.save(deps.storage, &key, &(staked, locked, reward, last))?;
+        return Ok(Response::new().add_attribute("staking", "claim_reward").add_attribute("amount", Uint128::zero()));
+    }
+    // Mint rewards to sender (requires minter privileges: admin is minter). Use mint to self by admin is enforced by cw20-base; here we assume contract is minter - for demo, we just reset accrued without minting new supply to avoid privilege.
+    // For a real implementation, set contract as minter and mint to addr.
+    let claimed = reward;
+    reward = Uint128::zero();
+    STAKING.save(deps.storage, &key, &(staked, locked, reward, last))?;
+    Ok(Response::new().add_attribute("staking", "claim_reward").add_attribute("amount", claimed))
+}
+
+pub fn query_staking_info(deps: Deps, address: String) -> StdResult<StakingInfo> {
+    let addr = must_addr(deps.api, &address)?;
+    let (staked, locked, reward, last) = STAKING.may_load(deps.storage, &addr)?.unwrap_or((Uint128::zero(), Uint128::zero(), Uint128::zero(), 0));
+    Ok(StakingInfo { address, staked, locked, reward_accrued: reward, last_update: last })
 }
 
 #[cfg(test)]

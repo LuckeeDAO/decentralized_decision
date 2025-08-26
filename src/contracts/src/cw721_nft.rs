@@ -63,6 +63,10 @@ pub fn execute(
                 .ok_or_else(|| cosmwasm_std::StdError::generic_err("No token to transfer"))?;
             execute_transfer_nft(deps, env, info, token_id, recipient)
         }
+        // 带元数据的铸造
+        ExecuteMsg::MintWithMetadata { recipient, token_uri, extension } => {
+            execute_mint_nft_with_meta(deps, env, info, recipient, token_uri, extension)
+        }
         // Send与BatchTransfer通过多次Transfer实现
         ExecuteMsg::Send { contract, amount: _, msg: _ } => {
             let token_id = find_first_token_of(deps.as_ref(), info.sender.to_string())
@@ -138,6 +142,34 @@ pub fn execute_mint_nft(
 
     Ok(Response::new()
         .add_attribute("method", "mint_nft")
+        .add_attribute("recipient", recipient)
+        .add_attribute("token_id", token_id))
+}
+
+pub fn execute_mint_nft_with_meta(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    recipient: String,
+    token_uri: Option<String>,
+    _extension: Option<serde_json::Value>,
+) -> StdResult<Response> {
+    let nonce = next_nonce(deps.storage)?;
+    let token_id = format!("nft_{}_{}", recipient, nonce);
+
+    let cw721_msg = Cw721BaseExecuteMsg::Mint {
+        token_id: token_id.clone(),
+        owner: recipient.clone(),
+        token_uri,
+        // 目前使用默认扩展类型（Empty），若需自定义扩展需调整合约泛型
+        extension: Extension::default(),
+    };
+
+    cw721_execute(deps, _env, info, cw721_msg)
+        .map_err(|e| cosmwasm_std::StdError::generic_err(format!("CW721 mint failed: {}", e)))?;
+
+    Ok(Response::new()
+        .add_attribute("method", "mint_nft_with_metadata")
         .add_attribute("recipient", recipient)
         .add_attribute("token_id", token_id))
 }
