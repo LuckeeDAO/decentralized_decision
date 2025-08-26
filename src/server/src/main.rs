@@ -4,6 +4,7 @@ use luckee_voting_wasm::{voting::VotingSystem, types::VotingSession};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::collections::HashMap;
 use tokio::sync::RwLock;
 use warp::{Filter, Rejection, Reply};
 use tracing::{info, error};
@@ -13,6 +14,7 @@ use base64::Engine;
 #[derive(Clone)]
 struct ServerState {
     voting_system: Arc<RwLock<VotingSystem>>,
+    balances: Arc<RwLock<HashMap<String, u128>>>,
 }
 
 /// API请求结构
@@ -47,6 +49,45 @@ struct ApiResponse<T> {
     success: bool,
     data: Option<T>,
     error: Option<String>,
+}
+
+/// 权限等级
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+enum PermissionLevel {
+    Basic,
+    Creator,
+    Admin,
+}
+
+#[derive(Debug, Deserialize)]
+struct PermissionCheckRequest {
+    address: String,
+    min_level: PermissionLevel,
+}
+
+#[derive(Debug, Serialize)]
+struct PermissionCheckResponse {
+    allowed: bool,
+    level: PermissionLevel,
+    balance: u128,
+}
+
+#[derive(Debug, Serialize)]
+struct PermissionLevelResponse {
+    level: PermissionLevel,
+    balance: u128,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdatePermissionRequest {
+    address: String,
+    balance: u128,
+}
+
+#[derive(Debug, Deserialize)]
+struct RevokePermissionRequest {
+    address: String,
 }
 
 impl<T> ApiResponse<T> {
@@ -234,6 +275,58 @@ async fn metrics() -> Result<impl Reply, Rejection> {
     Ok(warp::reply::with_header(metrics, "content-type", "text/plain; version=0.0.4; charset=utf-8"))
 }
 
+/// 计算权限等级
+fn determine_level(balance: u128) -> PermissionLevel {
+    let admin_threshold: u128 = std::env::var("PERM_ADMIN_THRESHOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(100_000);
+    let creator_threshold: u128 = std::env::var("PERM_CREATOR_THRESHOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(1_000);
+    if balance >= admin_threshold {
+        PermissionLevel::Admin
+    } else if balance >= creator_threshold {
+        PermissionLevel::Creator
+    } else {
+        PermissionLevel::Basic
+    }
+}
+
+/// 查询地址权限等级
+async fn get_permission_level(state: Arc<ServerState>, address: String) -> Result<impl Reply, Rejection> {
+    let balances = state.balances.read().await;
+    let bal = *balances.get(&address).unwrap_or(&0);
+    let level = determine_level(bal);
+    Ok(warp::reply::json(&ApiResponse::success(PermissionLevelResponse { level, balance: bal })))
+}
+
+/// 检查权限
+async fn check_permission(state: Arc<ServerState>, req: PermissionCheckRequest) -> Result<impl Reply, Rejection> {
+    let balances = state.balances.read().await;
+    let bal = *balances.get(&req.address).unwrap_or(&0);
+    let level = determine_level(bal);
+    let allowed = match (level, req.min_level) {
+        (PermissionLevel::Admin, _) => true,
+        (PermissionLevel::Creator, PermissionLevel::Basic) => true,
+        (PermissionLevel::Creator, PermissionLevel::Creator) => true,
+        (PermissionLevel::Creator, PermissionLevel::Admin) => false,
+        (PermissionLevel::Basic, PermissionLevel::Basic) => true,
+        (PermissionLevel::Basic, _) => false,
+    };
+    Ok(warp::reply::json(&ApiResponse::success(PermissionCheckResponse { allowed, level, balance: bal })))
+}
+
+/// 权限更新（设置余额，用于模拟/管理权限）
+async fn update_permission(state: Arc<ServerState>, req: UpdatePermissionRequest) -> Result<impl Reply, Rejection> {
+    let mut balances = state.balances.write().await;
+    balances.insert(req.address.clone(), req.balance);
+    let level = determine_level(req.balance);
+    Ok(warp::reply::json(&ApiResponse::success(PermissionLevelResponse { level, balance: req.balance })))
+}
+
+/// 权限撤销（将余额清零）
+async fn revoke_permission(state: Arc<ServerState>, req: RevokePermissionRequest) -> Result<impl Reply, Rejection> {
+    let mut balances = state.balances.write().await;
+    balances.insert(req.address.clone(), 0);
+    Ok(warp::reply::json(&ApiResponse::success(PermissionLevelResponse { level: PermissionLevel::Basic, balance: 0 })))
+}
+
 /// 错误处理
 async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     let (code, message) = if err.is_not_found() {
@@ -271,6 +364,33 @@ fn create_routes(state: Arc<ServerState>) -> impl Filter<Extract = impl Reply> +
         .and_then(|request: CreateSessionRequest, state: Arc<ServerState>| async move {
             create_session(state, request).await
         });
+
+    // 权限等级查询
+    let perm_level_route = warp::path!("permissions" / "level" / String)
+        .and(warp::get())
+        .and(state_filter.clone())
+        .and_then(|address: String, state: Arc<ServerState>| async move { get_permission_level(state, address).await });
+
+    // 权限检查
+    let perm_check_route = warp::path!("permissions" / "check")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(|request: PermissionCheckRequest, state: Arc<ServerState>| async move { check_permission(state, request).await });
+
+    // 权限更新
+    let perm_update_route = warp::path!("permissions" / "update")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(|request: UpdatePermissionRequest, state: Arc<ServerState>| async move { update_permission(state, request).await });
+
+    // 权限撤销
+    let perm_revoke_route = warp::path!("permissions" / "revoke")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(|request: RevokePermissionRequest, state: Arc<ServerState>| async move { revoke_permission(state, request).await });
     
     // 获取会话
     let get_session_route = warp::path!("sessions" / String)
@@ -318,6 +438,10 @@ fn create_routes(state: Arc<ServerState>) -> impl Filter<Extract = impl Reply> +
         .or(submit_commitment_route)
         .or(submit_reveal_route)
         .or(calculate_results_route)
+        .or(perm_level_route)
+        .or(perm_check_route)
+        .or(perm_update_route)
+        .or(perm_revoke_route)
         .recover(handle_rejection)
         .with(warp::cors().allow_any_origin())
 }
@@ -334,6 +458,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 创建服务器状态
     let state = Arc::new(ServerState {
         voting_system: Arc::new(RwLock::new(VotingSystem::new())),
+        balances: Arc::new(RwLock::new(HashMap::new())),
     });
     
     // 创建路由
@@ -368,7 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_submit_commitment_decoding() {
-        let state = Arc::new(ServerState { voting_system: Arc::new(RwLock::new(VotingSystem::new())) });
+        let state = Arc::new(ServerState { voting_system: Arc::new(RwLock::new(VotingSystem::new())), balances: Arc::new(RwLock::new(HashMap::new())) });
 
         // create a session first
         let create_req = CreateSessionRequest {
@@ -388,5 +513,30 @@ mod tests {
         };
         let reply = submit_commitment(state.clone(), req).await.unwrap().into_response();
         assert_eq!(reply.status(), warp::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_permission_update_and_revoke() {
+        let state = Arc::new(ServerState { voting_system: Arc::new(RwLock::new(VotingSystem::new())), balances: Arc::new(RwLock::new(HashMap::new())) });
+
+        // update permission (balance)
+        let up_req = UpdatePermissionRequest { address: "addr1".to_string(), balance: 1500 };
+        let up_reply = update_permission(state.clone(), up_req).await.unwrap().into_response();
+        assert_eq!(up_reply.status(), warp::http::StatusCode::OK);
+
+        // check level should be Creator
+        let check_req = PermissionCheckRequest { address: "addr1".to_string(), min_level: PermissionLevel::Creator };
+        let check_reply = check_permission(state.clone(), check_req).await.unwrap().into_response();
+        assert_eq!(check_reply.status(), warp::http::StatusCode::OK);
+
+        // revoke permission (balance -> 0)
+        let rv_req = RevokePermissionRequest { address: "addr1".to_string() };
+        let rv_reply = revoke_permission(state.clone(), rv_req).await.unwrap().into_response();
+        assert_eq!(rv_reply.status(), warp::http::StatusCode::OK);
+
+        // check now only Basic allowed
+        let check_req2 = PermissionCheckRequest { address: "addr1".to_string(), min_level: PermissionLevel::Basic };
+        let check_reply2 = check_permission(state.clone(), check_req2).await.unwrap().into_response();
+        assert_eq!(check_reply2.status(), warp::http::StatusCode::OK);
     }
 }

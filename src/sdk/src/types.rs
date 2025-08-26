@@ -5,6 +5,27 @@ use serde::{Deserialize, Serialize};
 /// 重新导出WASM模块的类型
 pub use luckee_voting_wasm::types::*;
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum PermissionLevel {
+	Basic,
+	Creator,
+	Admin,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionLevelResponse {
+	pub level: PermissionLevel,
+	pub balance: u128,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PermissionCheckResponse {
+	pub allowed: bool,
+	pub level: PermissionLevel,
+	pub balance: u128,
+}
+
 /// SDK配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SDKConfig {

@@ -75,6 +75,20 @@ impl VotingSDK {
     pub async fn calculate_results(&self, session_id: &str) -> Result<types::VotingResults, Box<dyn std::error::Error>> {
         self.client.calculate_results(session_id).await
     }
+
+    /// 查询权限等级
+    pub async fn get_permission_level(&self, address: &str) -> Result<types::PermissionLevelResponse, Box<dyn std::error::Error>> {
+        self.client.get_permission_level(address).await
+    }
+
+    /// 检查是否具有至少某权限
+    pub async fn check_permission(
+        &self,
+        address: &str,
+        min_level: types::PermissionLevel,
+    ) -> Result<types::PermissionCheckResponse, Box<dyn std::error::Error>> {
+        self.client.check_permission(address, min_level).await
+    }
 }
 
 #[cfg(test)]

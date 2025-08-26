@@ -194,6 +194,42 @@ impl VotingClient {
             Err(SDKError::ServerError(format!("HTTP {}", response.status())).into())
         }
     }
+
+    pub async fn get_permission_level(&self, address: &str) -> Result<super::types::PermissionLevelResponse, Box<dyn std::error::Error>> {
+        let url = format!("{}/permissions/level/{}", self.config.server_url, address);
+        let response = self.client.get(&url).send().await?;
+        if response.status().is_success() {
+            let api_response: serde_json::Value = response.json().await?;
+            if api_response["success"].as_bool().unwrap_or(false) {
+                let data = &api_response["data"];
+                Ok(serde_json::from_value(data.clone())?)
+            } else {
+                Err(SDKError::ServerError(api_response["error"].as_str().unwrap_or("未知错误").to_string()).into())
+            }
+        } else {
+            Err(SDKError::ServerError(format!("HTTP {}", response.status())).into())
+        }
+    }
+
+    pub async fn check_permission(&self, address: &str, min_level: super::types::PermissionLevel) -> Result<super::types::PermissionCheckResponse, Box<dyn std::error::Error>> {
+        let url = format!("{}/permissions/check", self.config.server_url);
+        let body = serde_json::json!({
+            "address": address,
+            "min_level": min_level,
+        });
+        let response = self.client.post(&url).json(&body).send().await?;
+        if response.status().is_success() {
+            let api_response: serde_json::Value = response.json().await?;
+            if api_response["success"].as_bool().unwrap_or(false) {
+                let data = &api_response["data"];
+                Ok(serde_json::from_value(data.clone())?)
+            } else {
+                Err(SDKError::ServerError(api_response["error"].as_str().unwrap_or("未知错误").to_string()).into())
+            }
+        } else {
+            Err(SDKError::ServerError(format!("HTTP {}", response.status())).into())
+        }
+    }
 }
 
 #[cfg(test)]
