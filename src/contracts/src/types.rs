@@ -22,6 +22,10 @@ pub enum ExecuteMsg {
         start_time: Timestamp,
         end_time: Timestamp,
     },
+    // NFT批量铸造（仅用于CW721实现）
+    BatchMint {
+        recipients: Vec<String>,
+    },
     SubmitVote {
         session_id: String,
         option_index: u32,
@@ -42,6 +46,29 @@ pub enum ExecuteMsg {
     Burn {
         amount: Uint128,
     },
+    // CW20发送与批量操作
+    Send {
+        contract: String,
+        amount: Uint128,
+        msg: Option<cosmwasm_std::Binary>,
+    },
+    BatchTransfer {
+        recipients: Vec<String>,
+        amounts: Vec<Uint128>,
+    },
+    BatchBurn {
+        amounts: Vec<Uint128>,
+    },
+    // 授权与代理转账
+    Approve {
+        spender: String,
+        amount: Uint128,
+    },
+    TransferFrom {
+        owner: String,
+        recipient: String,
+        amount: Uint128,
+    },
 }
 
 #[cw_serde]
@@ -57,6 +84,18 @@ pub enum QueryMsg {
     GetBalance { address: String },
     #[returns(TokenInfoResponse)]
     GetTokenInfo {},
+    // 代币权限与账户查询
+    #[returns(cw20::AllowanceResponse)]
+    GetAllowance { owner: String, spender: String },
+    #[returns(cw20::AllAccountsResponse)]
+    GetAllAccounts { start_after: Option<String>, limit: Option<u32> },
+    // NFT查询
+    #[returns(cw721::OwnerOfResponse)]
+    GetOwnerOf { token_id: String },
+    #[returns(cw721::NftInfoResponse<serde_json::Value>)]
+    GetNftInfo { token_id: String },
+    #[returns(cw721::AllNftInfoResponse<serde_json::Value>)]
+    GetAllNftInfo { token_id: String, include_expired: Option<bool> },
 }
 
 #[cw_serde]

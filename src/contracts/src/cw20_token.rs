@@ -61,6 +61,21 @@ pub fn execute(
         ExecuteMsg::Burn { amount } => {
             execute_burn(deps, env, info, amount)
         }
+        ExecuteMsg::Approve { spender, amount } => {
+            execute_approve(deps, env, info, spender, amount)
+        }
+        ExecuteMsg::TransferFrom { owner, recipient, amount } => {
+            execute_transfer_from(deps, env, info, owner, recipient, amount)
+        }
+        ExecuteMsg::Send { contract, amount, msg } => {
+            execute_send(deps, env, info, contract, amount, msg)
+        }
+        ExecuteMsg::BatchTransfer { recipients, amounts } => {
+            execute_batch_transfer(deps, env, info, recipients, amounts)
+        }
+        ExecuteMsg::BatchBurn { amounts } => {
+            execute_batch_burn(deps, env, info, amounts)
+        }
         _ => Ok(Response::new().add_attribute("method", "execute")),
     }
 }
@@ -75,6 +90,14 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::GetTokenInfo {} => {
             let token_info = query_token_info(deps)?;
             to_json_binary(&token_info)
+        }
+        QueryMsg::GetAllowance { owner, spender } => {
+            let resp = query_allowance(deps, owner, spender)?;
+            to_json_binary(&resp)
+        }
+        QueryMsg::GetAllAccounts { start_after, limit } => {
+            let resp = query_all_accounts(deps, start_after, limit)?;
+            to_json_binary(&resp)
         }
         _ => to_json_binary(&"Unsupported query"),
     }
@@ -100,6 +123,40 @@ pub fn execute_transfer(
 
     Ok(Response::new()
         .add_attribute("method", "transfer")
+        .add_attribute("recipient", recipient)
+        .add_attribute("amount", amount))
+}
+
+pub fn execute_approve(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    spender: String,
+    amount: Uint128,
+) -> StdResult<Response> {
+    let cw20_msg = Cw20BaseExecuteMsg::IncreaseAllowance { spender: spender.clone(), amount, expires: None };
+    cw20_execute(deps, _env, info, cw20_msg)
+        .map_err(|e| cosmwasm_std::StdError::generic_err(format!("CW20 approve failed: {}", e)))?;
+    Ok(Response::new()
+        .add_attribute("method", "approve")
+        .add_attribute("spender", spender)
+        .add_attribute("amount", amount))
+}
+
+pub fn execute_transfer_from(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    owner: String,
+    recipient: String,
+    amount: Uint128,
+) -> StdResult<Response> {
+    let cw20_msg = Cw20BaseExecuteMsg::TransferFrom { owner: owner.clone(), recipient: recipient.clone(), amount };
+    cw20_execute(deps, _env, info, cw20_msg)
+        .map_err(|e| cosmwasm_std::StdError::generic_err(format!("CW20 transfer_from failed: {}", e)))?;
+    Ok(Response::new()
+        .add_attribute("method", "transfer_from")
+        .add_attribute("owner", owner)
         .add_attribute("recipient", recipient)
         .add_attribute("amount", amount))
 }
@@ -177,6 +234,73 @@ pub fn query_token_info(deps: Deps) -> StdResult<crate::types::TokenInfoResponse
     })
 }
 
+pub fn execute_send(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    contract: String,
+    amount: Uint128,
+    msg: Option<Binary>,
+) -> StdResult<Response> {
+    let cw20_msg = Cw20BaseExecuteMsg::Send { contract: contract.clone(), amount, msg: msg.unwrap_or_else(Binary::default) };
+    cw20_execute(deps, _env, info, cw20_msg)
+        .map_err(|e| cosmwasm_std::StdError::generic_err(format!("CW20 send failed: {}", e)))?;
+    Ok(Response::new()
+        .add_attribute("method", "send")
+        .add_attribute("contract", contract)
+        .add_attribute("amount", amount))
+}
+
+pub fn execute_batch_transfer(
+    mut deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    recipients: Vec<String>,
+    amounts: Vec<Uint128>,
+) -> StdResult<Response> {
+    if recipients.len() != amounts.len() {
+        return Err(cosmwasm_std::StdError::generic_err("Recipients and amounts length mismatch"));
+    }
+    let mut resp = Response::new().add_attribute("method", "batch_transfer");
+    for (rcp, amt) in recipients.into_iter().zip(amounts.into_iter()) {
+        let _ = execute_transfer(deps.branch(), env.clone(), info.clone(), rcp.clone(), amt)?;
+        resp = resp.add_attribute("transfer", format!("{}:{}", rcp, amt));
+    }
+    Ok(resp)
+}
+
+pub fn execute_batch_burn(
+    mut deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    amounts: Vec<Uint128>,
+) -> StdResult<Response> {
+    let mut resp = Response::new().add_attribute("method", "batch_burn");
+    for amt in amounts.into_iter() {
+        let _ = execute_burn(deps.branch(), env.clone(), info.clone(), amt)?;
+        resp = resp.add_attribute("burn", format!("{}", amt));
+    }
+    Ok(resp)
+}
+
+pub fn query_allowance(deps: Deps, owner: String, spender: String) -> StdResult<cw20::AllowanceResponse> {
+    let cw20_msg = Cw20BaseQueryMsg::Allowance { owner, spender };
+    let response: Binary = cw20_query(deps, mock_env(), cw20_msg)?;
+    let allowance: cw20::AllowanceResponse = from_json(&response)?;
+    Ok(allowance)
+}
+
+pub fn query_all_accounts(
+    deps: Deps,
+    start_after: Option<String>,
+    limit: Option<u32>,
+) -> StdResult<cw20::AllAccountsResponse> {
+    let cw20_msg = Cw20BaseQueryMsg::AllAccounts { start_after, limit };
+    let response: Binary = cw20_query(deps, mock_env(), cw20_msg)?;
+    let accounts: cw20::AllAccountsResponse = from_json(&response)?;
+    Ok(accounts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,14 +327,122 @@ mod tests {
     fn test_transfer() {
         let mut deps = mock_dependencies();
         let env = mock_env();
-        let info = mock_info("sender", &[]);
 
-        let msg = ExecuteMsg::Transfer {
+        // instantiate contract with admin as minter
+        let init_info = mock_info("creator", &[]);
+        let init_msg = InstantiateMsg {
+            admin: "admin".to_string(),
+            token_name: "Test Token".to_string(),
+            token_symbol: "TEST".to_string(),
+            decimals: 6,
+        };
+        instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
+
+        // mint to sender so it has balance to transfer
+        let mint_info = mock_info("admin", &[]);
+        let mint_msg = ExecuteMsg::Mint {
+            recipient: "sender".to_string(),
+            amount: Uint128::new(200),
+        };
+        execute(deps.as_mut(), env.clone(), mint_info, mint_msg).unwrap();
+
+        // now transfer from sender to recipient
+        let transfer_info = mock_info("sender", &[]);
+        let transfer_msg = ExecuteMsg::Transfer {
             recipient: "recipient".to_string(),
             amount: Uint128::new(100),
         };
 
-        let res = execute(deps.as_mut(), env, info, msg).unwrap();
+        let res = execute(deps.as_mut(), env, transfer_info, transfer_msg).unwrap();
         assert_eq!(res.attributes.len(), 3);
+    }
+
+    #[test]
+    fn test_approve_and_transfer_from() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+
+        // instantiate
+        let init_info = mock_info("creator", &[]);
+        let init_msg = InstantiateMsg {
+            admin: "admin".to_string(),
+            token_name: "Test Token".to_string(),
+            token_symbol: "TEST".to_string(),
+            decimals: 6,
+        };
+        instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
+
+        // mint to owner
+        let mint_info = mock_info("admin", &[]);
+        let mint_msg = ExecuteMsg::Mint { recipient: "owner".to_string(), amount: Uint128::new(200) };
+        execute(deps.as_mut(), env.clone(), mint_info, mint_msg).unwrap();
+
+        // owner approves spender
+        let approve_info = mock_info("owner", &[]);
+        let approve_msg = ExecuteMsg::Approve { spender: "spender".to_string(), amount: Uint128::new(150) };
+        execute(deps.as_mut(), env.clone(), approve_info, approve_msg).unwrap();
+
+        // spender transfers from owner to recipient
+        let tf_info = mock_info("spender", &[]);
+        let tf_msg = ExecuteMsg::TransferFrom { owner: "owner".to_string(), recipient: "rcp".to_string(), amount: Uint128::new(100) };
+        let res = execute(deps.as_mut(), env.clone(), tf_info, tf_msg).unwrap();
+        assert!(res.attributes.iter().any(|a| a.key == "method" && a.value == "transfer_from"));
+
+        // query allowance
+        let allowance = query_allowance(deps.as_ref(), "owner".to_string(), "spender".to_string()).unwrap();
+        assert_eq!(allowance.allowance, Uint128::new(50));
+
+        // list accounts
+        let accounts = query_all_accounts(deps.as_ref(), None, Some(10)).unwrap();
+        assert!(accounts.accounts.len() >= 2);
+    }
+
+    #[test]
+    fn test_send_and_batch_ops() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+
+        // instantiate
+        let init_info = mock_info("creator", &[]);
+        let init_msg = InstantiateMsg { admin: "admin".to_string(), token_name: "Token".to_string(), token_symbol: "TOK".to_string(), decimals: 6 };
+        instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
+
+        // mint to alice
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info("admin", &[]),
+            ExecuteMsg::Mint { recipient: "alice".to_string(), amount: Uint128::new(300) }
+        ).unwrap();
+
+        // send from alice to contractX
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info("alice", &[]),
+            ExecuteMsg::Send { contract: "contractx".to_string(), amount: Uint128::new(50), msg: None }
+        ).unwrap();
+        assert!(res.attributes.iter().any(|a| a.key == "method" && a.value == "send"));
+
+        // batch transfer from alice to bob/charlie
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info("alice", &[]),
+            ExecuteMsg::BatchTransfer {
+                recipients: vec!["bob".to_string(), "charlie".to_string()],
+                amounts: vec![Uint128::new(60), Uint128::new(40)],
+            }
+        ).unwrap();
+        assert!(res.attributes.iter().any(|a| a.key == "method" && a.value == "batch_transfer"));
+
+        // batch burn from alice
+        let res = execute(
+            deps.as_mut(),
+            env,
+            mock_info("alice", &[]),
+            ExecuteMsg::BatchBurn { amounts: vec![Uint128::new(10), Uint128::new(5)] }
+        ).unwrap();
+        assert!(res.attributes.iter().any(|a| a.key == "method" && a.value == "batch_burn"));
     }
 }

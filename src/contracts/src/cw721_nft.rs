@@ -2,7 +2,7 @@
 
 use cosmwasm_std::{
     entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo,
-    Response, StdResult, from_json, testing::mock_env,
+    Response, StdResult, from_json, testing::mock_env, Storage,
 };
 use cw721_base::{
     entry::{execute as cw721_execute, instantiate as cw721_instantiate, query as cw721_query},
@@ -36,7 +36,7 @@ pub fn instantiate(
 
 #[entry_point]
 pub fn execute(
-    deps: DepsMut,
+    mut deps: DepsMut,
     env: Env,
     info: MessageInfo,
     msg: ExecuteMsg,
@@ -45,6 +45,49 @@ pub fn execute(
         ExecuteMsg::Mint { recipient, amount: _ } => {
             // 对于NFT，我们忽略amount参数，因为每个NFT都是唯一的
             execute_mint_nft(deps, env, info, recipient)
+        }
+        ExecuteMsg::BatchMint { recipients } => {
+            let mut resp = Response::new().add_attribute("method", "batch_mint_nft");
+            for r in recipients.into_iter() {
+                let r_clone = r.clone();
+                execute_mint_nft(deps.branch(), env.clone(), info.clone(), r_clone.clone())?;
+                resp = resp.add_attribute("mint", r);
+            }
+            Ok(resp)
+        }
+        // 支持转移与销毁
+        ExecuteMsg::Transfer { recipient, amount: _ } => {
+            // 查找发送者持有的第一个token并转移
+            let token_id = find_first_token_of(deps.as_ref(), info.sender.to_string())
+                .map_err(|e| cosmwasm_std::StdError::generic_err(e))?
+                .ok_or_else(|| cosmwasm_std::StdError::generic_err("No token to transfer"))?;
+            execute_transfer_nft(deps, env, info, token_id, recipient)
+        }
+        // Send与BatchTransfer通过多次Transfer实现
+        ExecuteMsg::Send { contract, amount: _, msg: _ } => {
+            let token_id = find_first_token_of(deps.as_ref(), info.sender.to_string())
+                .map_err(|e| cosmwasm_std::StdError::generic_err(e))?
+                .ok_or_else(|| cosmwasm_std::StdError::generic_err("No token to send"))?;
+            // 在NFT场景下，将contract参数视为接收地址
+            execute_transfer_nft(deps, env, info, token_id, contract)
+        }
+        ExecuteMsg::BatchTransfer { recipients, amounts: _ } => {
+            let mut resp = Response::new().add_attribute("method", "batch_transfer_nft");
+            for r in recipients.into_iter() {
+                let token_id = find_first_token_of(deps.as_ref(), info.sender.to_string())
+                    .map_err(|e| cosmwasm_std::StdError::generic_err(e))?
+                    .ok_or_else(|| cosmwasm_std::StdError::generic_err("No token to transfer"))?;
+                let r_clone = r.clone();
+                execute_transfer_nft(deps.branch(), env.clone(), info.clone(), token_id, r_clone.clone())?;
+                resp = resp.add_attribute("transfer", r);
+            }
+            Ok(resp)
+        }
+        ExecuteMsg::Burn { amount: _ } => {
+            let token_id = find_first_token_of(deps.as_ref(), info.sender.to_string())
+                .map_err(|e| cosmwasm_std::StdError::generic_err(e))?
+                .ok_or_else(|| cosmwasm_std::StdError::generic_err("No token to burn"))?;
+            execute_burn_nft(deps, env, info, token_id)
         }
         _ => Ok(Response::new().add_attribute("method", "execute")),
     }
@@ -57,6 +100,18 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             let token_info = query_token_info(deps)?;
             to_json_binary(&token_info)
         }
+        QueryMsg::GetOwnerOf { token_id } => {
+            let resp = query_owner_of(deps, token_id)?;
+            to_json_binary(&resp)
+        }
+        QueryMsg::GetNftInfo { token_id } => {
+            let resp = query_nft_info(deps, token_id)?;
+            to_json_binary(&resp)
+        }
+        QueryMsg::GetAllNftInfo { token_id, include_expired } => {
+            let resp = query_all_nft_info(deps, token_id, include_expired)?;
+            to_json_binary(&resp)
+        }
         _ => to_json_binary(&"Unsupported query"),
     }
 }
@@ -67,8 +122,9 @@ pub fn execute_mint_nft(
     info: MessageInfo,
     recipient: String,
 ) -> StdResult<Response> {
-    // 生成唯一的token ID
-    let token_id = format!("nft_{}", recipient);
+    // 生成唯一的token ID（基于全局自增nonce）
+    let nonce = next_nonce(deps.storage)?;
+    let token_id = format!("nft_{}_{}", recipient, nonce);
     
     let cw721_msg = Cw721BaseExecuteMsg::Mint {
         token_id: token_id.clone(),
@@ -84,6 +140,92 @@ pub fn execute_mint_nft(
         .add_attribute("method", "mint_nft")
         .add_attribute("recipient", recipient)
         .add_attribute("token_id", token_id))
+}
+
+fn next_nonce(storage: &mut dyn Storage) -> StdResult<u64> {
+    const KEY: &[u8] = b"nft_nonce";
+    let current = storage.get(KEY).map(|b| {
+        let mut arr = [0u8; 8];
+        arr.copy_from_slice(&b);
+        u64::from_le_bytes(arr)
+    }).unwrap_or(0);
+    let next = current.wrapping_add(1);
+    storage.set(KEY, &next.to_le_bytes());
+    Ok(next)
+}
+
+pub fn execute_transfer_nft(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    token_id: String,
+    recipient: String,
+) -> StdResult<Response> {
+    let cw721_msg = Cw721BaseExecuteMsg::TransferNft { recipient: recipient.clone(), token_id: token_id.clone() };
+    cw721_execute(deps, _env, info, cw721_msg)
+        .map_err(|e| cosmwasm_std::StdError::generic_err(format!("CW721 transfer failed: {}", e)))?;
+    Ok(Response::new()
+        .add_attribute("method", "transfer_nft")
+        .add_attribute("recipient", recipient)
+        .add_attribute("token_id", token_id))
+}
+
+pub fn execute_burn_nft(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    token_id: String,
+) -> StdResult<Response> {
+    let cw721_msg = Cw721BaseExecuteMsg::Burn { token_id: token_id.clone() };
+    cw721_execute(deps, _env, info, cw721_msg)
+        .map_err(|e| cosmwasm_std::StdError::generic_err(format!("CW721 burn failed: {}", e)))?;
+    Ok(Response::new()
+        .add_attribute("method", "burn_nft")
+        .add_attribute("token_id", token_id))
+}
+
+pub fn query_owner_of(deps: Deps, token_id: String) -> StdResult<cw721::OwnerOfResponse> {
+    let cw721_msg = Cw721BaseQueryMsg::OwnerOf { token_id, include_expired: None }; 
+    let response: Binary = cw721_query(deps, mock_env(), cw721_msg)?;
+    let owner: cw721::OwnerOfResponse = from_json(&response)?;
+    Ok(owner)
+}
+
+pub fn query_nft_info(deps: Deps, token_id: String) -> StdResult<cw721::NftInfoResponse<serde_json::Value>> {
+    let cw721_msg = Cw721BaseQueryMsg::NftInfo { token_id };
+    let response: Binary = cw721_query(deps, mock_env(), cw721_msg)?;
+    let info: cw721::NftInfoResponse<serde_json::Value> = from_json(&response)?;
+    Ok(info)
+}
+
+pub fn query_all_nft_info(
+    deps: Deps,
+    token_id: String,
+    include_expired: Option<bool>,
+) -> StdResult<cw721::AllNftInfoResponse<serde_json::Value>> {
+    let cw721_msg = Cw721BaseQueryMsg::AllNftInfo { token_id, include_expired };
+    let response: Binary = cw721_query(deps, mock_env(), cw721_msg)?;
+    let info: cw721::AllNftInfoResponse<serde_json::Value> = from_json(&response)?;
+    Ok(info)
+}
+
+pub fn query_tokens_of_owner(
+    deps: Deps,
+    owner: String,
+    start_after: Option<String>,
+    limit: Option<u32>,
+) -> StdResult<cw721::TokensResponse> {
+    let cw721_msg = Cw721BaseQueryMsg::Tokens { owner, start_after, limit };
+    let response: Binary = cw721_query(deps, mock_env(), cw721_msg)?;
+    let tokens: cw721::TokensResponse = from_json(&response)?;
+    Ok(tokens)
+}
+
+fn find_first_token_of(deps: Deps, owner: String) -> Result<Option<String>, String> {
+    match query_tokens_of_owner(deps, owner, None, Some(1)) {
+        Ok(resp) => Ok(resp.tokens.into_iter().next()),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 pub fn query_token_info(deps: Deps) -> StdResult<crate::types::TokenInfoResponse> {
@@ -127,14 +269,117 @@ mod tests {
     fn test_mint_nft() {
         let mut deps = mock_dependencies();
         let env = mock_env();
-        let info = mock_info("minter", &[]);
 
+        // instantiate contract with admin as minter
+        let init_info = mock_info("creator", &[]);
+        let init_msg = InstantiateMsg {
+            admin: "admin".to_string(),
+            token_name: "Test NFT".to_string(),
+            token_symbol: "TNFT".to_string(),
+            decimals: 0,
+        };
+        instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
+
+        // mint by admin (minter)
+        let mint_info = mock_info("admin", &[]);
         let msg = ExecuteMsg::Mint {
             recipient: "recipient".to_string(),
             amount: cosmwasm_std::Uint128::new(1),
         };
 
-        let res = execute(deps.as_mut(), env, info, msg).unwrap();
+        let res = execute(deps.as_mut(), env, mint_info, msg).unwrap();
         assert_eq!(res.attributes.len(), 3);
+    }
+
+    #[test]
+    fn test_transfer_and_burn_nft() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+
+        // instantiate with admin
+        let init_info = mock_info("creator", &[]);
+        let init_msg = InstantiateMsg {
+            admin: "admin".to_string(),
+            token_name: "Test NFT".to_string(),
+            token_symbol: "TNFT".to_string(),
+            decimals: 0,
+        };
+        instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
+
+        // mint to owner
+        let mint_info = mock_info("admin", &[]);
+        let msg = ExecuteMsg::Mint { recipient: "owner".to_string(), amount: cosmwasm_std::Uint128::new(1) };
+        execute(deps.as_mut(), env.clone(), mint_info, msg).unwrap();
+
+        // transfer by owner to new_owner
+        let transfer_info = mock_info("owner", &[]);
+        let transfer_msg = ExecuteMsg::Transfer { recipient: "new_owner".to_string(), amount: cosmwasm_std::Uint128::new(1) };
+        let res = execute(deps.as_mut(), env.clone(), transfer_info, transfer_msg).unwrap();
+        assert!(res.attributes.iter().any(|a| a.key == "method" && a.value == "transfer_nft"));
+
+        // query tokens of new_owner and assert one exists
+        let tokens = query_tokens_of_owner(deps.as_ref(), "new_owner".to_string(), None, Some(10)).unwrap();
+        assert_eq!(tokens.tokens.len(), 1);
+        let token_id = tokens.tokens[0].clone();
+
+        // burn by new owner
+        let burn_info = mock_info("new_owner", &[]);
+        let burn_msg = ExecuteMsg::Burn { amount: cosmwasm_std::Uint128::new(1) };
+        let res = execute(deps.as_mut(), env.clone(), burn_info, burn_msg).unwrap();
+        assert!(res.attributes.iter().any(|a| a.key == "method" && a.value == "burn_nft"));
+
+        // verify token no longer owned (tokens list empty)
+        let tokens_after = query_tokens_of_owner(deps.as_ref(), "new_owner".to_string(), None, Some(10)).unwrap();
+        assert!(tokens_after.tokens.iter().find(|t| *t == &token_id).is_none());
+    }
+
+    #[test]
+    fn test_send_and_batch_transfer_nft() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+
+        // instantiate with admin
+        let init_info = mock_info("creator", &[]);
+        let init_msg = InstantiateMsg { admin: "admin".to_string(), token_name: "Test NFT".to_string(), token_symbol: "tnft".to_string(), decimals: 0 };
+        instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
+
+        // mint two NFTs to alice
+        execute(deps.as_mut(), env.clone(), mock_info("admin", &[]), ExecuteMsg::Mint { recipient: "alice".to_string(), amount: cosmwasm_std::Uint128::new(1) }).unwrap();
+        execute(deps.as_mut(), env.clone(), mock_info("admin", &[]), ExecuteMsg::Mint { recipient: "alice".to_string(), amount: cosmwasm_std::Uint128::new(1) }).unwrap();
+
+        // send one to bob (map contract to recipient in NFT context)
+        let res = execute(deps.as_mut(), env.clone(), mock_info("alice", &[]), ExecuteMsg::Send { contract: "bobwallet".to_string(), amount: cosmwasm_std::Uint128::new(1), msg: None }).unwrap();
+        assert!(res.attributes.iter().any(|a| a.key == "method" && a.value == "transfer_nft"));
+
+        // batch transfer: alice sends remaining NFTs one by one to [c1, c2] (second may fail if none left; we mint third to ensure)
+        execute(deps.as_mut(), env.clone(), mock_info("admin", &[]), ExecuteMsg::Mint { recipient: "alice".to_string(), amount: cosmwasm_std::Uint128::new(1) }).unwrap();
+        let res = execute(deps.as_mut(), env, mock_info("alice", &[]), ExecuteMsg::BatchTransfer { recipients: vec!["charlie1".to_string(), "charlie2".to_string()], amounts: vec![cosmwasm_std::Uint128::new(1), cosmwasm_std::Uint128::new(1)] }).unwrap();
+        assert!(res.attributes.iter().any(|a| a.key == "method" && a.value == "batch_transfer_nft"));
+    }
+
+    #[test]
+    fn test_batch_mint_nft() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+
+        // instantiate with admin
+        let init_info = mock_info("creator", &[]);
+        let init_msg = InstantiateMsg { admin: "admin".to_string(), token_name: "TNFT".to_string(), token_symbol: "TN".to_string(), decimals: 0 };
+        instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
+
+        // batch mint by admin
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info("admin", &[]),
+            ExecuteMsg::BatchMint { recipients: vec!["user1".to_string(), "user2".to_string(), "user3".to_string()] }
+        ).unwrap();
+        assert!(res.attributes.iter().any(|a| a.key == "method" && a.value == "batch_mint_nft"));
+
+        // verify each has at least one token
+        for u in ["user1", "user2", "user3"].iter() {
+            let tokens = query_tokens_of_owner(deps.as_ref(), (*u).to_string(), None, Some(10)).unwrap();
+            assert_eq!(tokens.tokens.len(), 1);
+        }
     }
 }

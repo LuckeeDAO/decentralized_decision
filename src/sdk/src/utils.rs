@@ -27,7 +27,7 @@ impl SDKUtils {
     
     /// 验证会话ID格式
     pub fn validate_session_id(session_id: &str) -> bool {
-        session_id.starts_with("session_") && session_id.len() == 25
+        session_id.starts_with("session_") && session_id.len() == 24
     }
     
     /// 验证用户ID格式

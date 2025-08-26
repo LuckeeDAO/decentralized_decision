@@ -445,16 +445,27 @@ mod tests {
         assert_eq!(session.session_id, "test_session");
         assert_eq!(session.state, VotingSessionState::Created);
         
-        // 提交承诺
-        let _commitment = voting_system.submit_commitment(
+        // 提交第一个承诺，不应进入CommitPhase
+        let _commitment1 = voting_system.submit_commitment(
             "test_session",
             "user1",
             b"vote for option 1"
         ).unwrap();
         
         let session = voting_system.get_session("test_session").unwrap();
-        assert_eq!(session.state, VotingSessionState::CommitPhase);
+        assert_eq!(session.state, VotingSessionState::Created);
         assert!(session.commitments.contains_key("user1"));
+
+        // 提交第二个承诺，应进入CommitPhase
+        let _commitment2 = voting_system.submit_commitment(
+            "test_session",
+            "user2",
+            b"vote for option 2"
+        ).unwrap();
+
+        let session = voting_system.get_session("test_session").unwrap();
+        assert_eq!(session.state, VotingSessionState::CommitPhase);
+        assert!(session.commitments.contains_key("user2"));
     }
 
     #[test]
