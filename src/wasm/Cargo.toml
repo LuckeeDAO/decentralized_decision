@@ -1,0 +1,50 @@
+[package]
+name = "luckee-voting-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "基于比特承诺模型的去中心化投票系统 - WebAssembly核心模块"
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# 工作空间依赖
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# 密码学依赖
+sha2.workspace = true
+rand.workspace = true
+ed25519-dalek.workspace = true
+aes-gcm = { version = "0.10", features = ["aes"] }
+argon2 = { version = "0.5", features = ["std"] }
+pbkdf2 = { version = "0.12", features = ["simple"] }
+
+# WebAssembly依赖
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+js-sys.workspace = true
+web-sys.workspace = true
+
+# 测试依赖
+criterion.workspace = true
+fake.workspace = true
+
+# 额外依赖
+uuid = { version = "1.0", features = ["v4"] }
+console_error_panic_hook = "0.1"
+tracing-wasm = "0.2"
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+
+[features]
+default = []
+console_error_panic_hook = []

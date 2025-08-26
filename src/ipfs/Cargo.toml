@@ -1,0 +1,24 @@
+[package]
+name = "luckee-voting-ipfs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "基于比特承诺模型的去中心化投票系统 - IPFS存储模块"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# 工作空间依赖
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+# IPFS依赖
+# ipfs-http-client.workspace = true
+
+# 额外依赖
+reqwest = { version = "0.11", features = ["json", "multipart"] }
+bytes = "1.0"

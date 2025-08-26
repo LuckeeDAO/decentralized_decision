@@ -1,0 +1,28 @@
+[package]
+name = "luckee-voting-sdk"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "基于比特承诺模型的去中心化投票系统 - 客户端SDK"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# 工作空间依赖
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+
+# HTTP客户端依赖
+reqwest = { version = "0.11", features = ["json"] }
+
+# 额外依赖
+base64 = "0.21"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+
+# 本地依赖
+luckee-voting-wasm = { path = "../wasm" }

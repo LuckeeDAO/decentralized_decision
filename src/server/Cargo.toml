@@ -1,0 +1,46 @@
+[package]
+name = "luckee-voting-server"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "基于比特承诺模型的去中心化投票系统 - 服务器模块"
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "server"
+path = "src/main.rs"
+
+[dependencies]
+# 工作空间依赖
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# HTTP服务器依赖
+warp.workspace = true
+tungstenite.workspace = true
+tokio-tungstenite.workspace = true
+
+# 配置管理
+config.workspace = true
+dotenv.workspace = true
+
+# 监控和指标
+prometheus.workspace = true
+metrics.workspace = true
+
+# 本地依赖
+luckee-voting-wasm = { path = "../wasm" }
+luckee-voting-ipfs = { path = "../ipfs" }
+
+# 额外依赖
+futures = "0.3"
+tower = "0.4"
+tower-http = { version = "0.4", features = ["cors", "trace"] }
+hex = "0.4"
+base64 = "0.21"

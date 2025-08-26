@@ -1,0 +1,50 @@
+# 基于比特承诺模型的去中心化投票系统配置文件
+
+[server]
+# 服务器配置
+host = "0.0.0.0"
+port = 8080
+workers = 4
+max_connections = 1000
+
+[logging]
+# 日志配置
+level = "info"
+format = "json"
+output = "stdout"
+
+[ipfs]
+# IPFS配置
+url = "http://localhost:5001"
+timeout = 30
+max_retries = 3
+
+[blockchain]
+# 区块链配置
+network = "injective-testnet"
+rpc_url = "https://testnet.sentry.tm.injective.network:26657"
+chain_id = "injective-888"
+
+[contracts]
+# 智能合约配置
+token_contract = ""
+nft_contract = ""
+voting_contract = ""
+
+[security]
+# 安全配置
+max_request_size = "10MB"
+rate_limit = 1000
+cors_origins = ["*"]
+
+[performance]
+# 性能配置
+cache_size = 1000
+cache_ttl = 3600
+max_concurrent_requests = 100
+
+[monitoring]
+# 监控配置
+metrics_enabled = true
+health_check_interval = 30
+prometheus_port = 9090

@@ -1,0 +1,28 @@
+[package]
+name = "luckee-voting-contracts"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description = "基于比特承诺模型的去中心化投票系统 - 智能合约模块"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+# 工作空间依赖
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+
+# 区块链依赖
+cosmwasm-schema.workspace = true
+cosmwasm-std.workspace = true
+cosmwasm-storage.workspace = true
+cw-storage-plus.workspace = true
+cw2.workspace = true
+
+# 额外依赖
+cw20 = "1.1"
+cw20-base = "1.1"
+cw721 = "0.18"
+cw721-base = "0.18"
