@@ -4,7 +4,7 @@ use luckee_voting_wasm::{voting::VotingSystem, types::VotingSession};
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tokio::sync::RwLock;
 use warp::{Filter, Rejection, Reply};
 use tracing::{info, error};
@@ -15,6 +15,12 @@ use base64::Engine;
 struct ServerState {
     voting_system: Arc<RwLock<VotingSystem>>,
     balances: Arc<RwLock<HashMap<String, u128>>>,
+    // key: delegatee, value: list of delegator addresses
+    delegations_to: Arc<RwLock<HashMap<String, Vec<String>>>>,
+    // key: child, value: parent
+    inheritance_parent: Arc<RwLock<HashMap<String, String>>>,
+    // audit logs for permission actions
+    audit_logs: Arc<RwLock<Vec<AuditEvent>>>,
 }
 
 /// API请求结构
@@ -79,6 +85,14 @@ struct PermissionLevelResponse {
     balance: u128,
 }
 
+#[derive(Debug, Serialize, Clone)]
+struct AuditEvent {
+    timestamp: u64,
+    action: String,
+    address: String,
+    details: String,
+}
+
 #[derive(Debug, Deserialize)]
 struct UpdatePermissionRequest {
     address: String,
@@ -88,6 +102,28 @@ struct UpdatePermissionRequest {
 #[derive(Debug, Deserialize)]
 struct RevokePermissionRequest {
     address: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DelegatePermissionRequest {
+    from: String,
+    to: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct InheritPermissionRequest {
+    child: String,
+    parent: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UninheritPermissionRequest {
+    child: String,
+}
+
+#[derive(Debug, Serialize)]
+struct AuditListResponse {
+    events: Vec<AuditEvent>,
 }
 
 impl<T> ApiResponse<T> {
@@ -290,17 +326,13 @@ fn determine_level(balance: u128) -> PermissionLevel {
 
 /// 查询地址权限等级
 async fn get_permission_level(state: Arc<ServerState>, address: String) -> Result<impl Reply, Rejection> {
-    let balances = state.balances.read().await;
-    let bal = *balances.get(&address).unwrap_or(&0);
-    let level = determine_level(bal);
-    Ok(warp::reply::json(&ApiResponse::success(PermissionLevelResponse { level, balance: bal })))
+    let (eff_bal, level) = compute_effective_balance_and_level(&state, &address).await;
+    Ok(warp::reply::json(&ApiResponse::success(PermissionLevelResponse { level, balance: eff_bal })))
 }
 
 /// 检查权限
 async fn check_permission(state: Arc<ServerState>, req: PermissionCheckRequest) -> Result<impl Reply, Rejection> {
-    let balances = state.balances.read().await;
-    let bal = *balances.get(&req.address).unwrap_or(&0);
-    let level = determine_level(bal);
+    let (bal, level) = compute_effective_balance_and_level(&state, &req.address).await;
     let allowed = match (level, req.min_level) {
         (PermissionLevel::Admin, _) => true,
         (PermissionLevel::Creator, PermissionLevel::Basic) => true,
@@ -317,6 +349,7 @@ async fn update_permission(state: Arc<ServerState>, req: UpdatePermissionRequest
     let mut balances = state.balances.write().await;
     balances.insert(req.address.clone(), req.balance);
     let level = determine_level(req.balance);
+    push_audit(&state, "update".to_string(), req.address.clone(), format!("balance={}", req.balance)).await;
     Ok(warp::reply::json(&ApiResponse::success(PermissionLevelResponse { level, balance: req.balance })))
 }
 
@@ -324,7 +357,105 @@ async fn update_permission(state: Arc<ServerState>, req: UpdatePermissionRequest
 async fn revoke_permission(state: Arc<ServerState>, req: RevokePermissionRequest) -> Result<impl Reply, Rejection> {
     let mut balances = state.balances.write().await;
     balances.insert(req.address.clone(), 0);
+    push_audit(&state, "revoke".to_string(), req.address.clone(), "balance=0".to_string()).await;
     Ok(warp::reply::json(&ApiResponse::success(PermissionLevelResponse { level: PermissionLevel::Basic, balance: 0 })))
+}
+
+/// 权限委托（from -> to）
+async fn delegate_permission(state: Arc<ServerState>, req: DelegatePermissionRequest) -> Result<impl Reply, Rejection> {
+    let mut delegations_to = state.delegations_to.write().await;
+    let entry = delegations_to.entry(req.to.clone()).or_default();
+    if !entry.contains(&req.from) {
+        entry.push(req.from.clone());
+    }
+    push_audit(&state, "delegate".to_string(), req.to.clone(), format!("from={}", req.from)).await;
+    Ok(warp::reply::json(&ApiResponse::success(())))
+}
+
+/// 取消委托（from -> to）
+async fn undelegate_permission(state: Arc<ServerState>, req: DelegatePermissionRequest) -> Result<impl Reply, Rejection> {
+    let mut delegations_to = state.delegations_to.write().await;
+    if let Some(vec) = delegations_to.get_mut(&req.to) {
+        vec.retain(|d| d != &req.from);
+    }
+    push_audit(&state, "undelegate".to_string(), req.to.clone(), format!("from={}", req.from)).await;
+    Ok(warp::reply::json(&ApiResponse::success(())))
+}
+
+/// 设置继承（child -> parent）
+async fn inherit_permission(state: Arc<ServerState>, req: InheritPermissionRequest) -> Result<impl Reply, Rejection> {
+    let mut inheritance_parent = state.inheritance_parent.write().await;
+    inheritance_parent.insert(req.child.clone(), req.parent.clone());
+    push_audit(&state, "inherit".to_string(), req.child.clone(), format!("parent={}", req.parent)).await;
+    Ok(warp::reply::json(&ApiResponse::success(())))
+}
+
+/// 取消继承（child）
+async fn uninherit_permission(state: Arc<ServerState>, req: UninheritPermissionRequest) -> Result<impl Reply, Rejection> {
+    let mut inheritance_parent = state.inheritance_parent.write().await;
+    inheritance_parent.remove(&req.child);
+    push_audit(&state, "uninherit".to_string(), req.child.clone(), String::new()).await;
+    Ok(warp::reply::json(&ApiResponse::success(())))
+}
+
+/// 审计日志列表
+async fn list_audit_logs(state: Arc<ServerState>, limit: Option<usize>) -> Result<impl Reply, Rejection> {
+    let logs = state.audit_logs.read().await;
+    let n = limit.unwrap_or(100);
+    let start = logs.len().saturating_sub(n);
+    let events = logs[start..].to_vec();
+    Ok(warp::reply::json(&ApiResponse::success(AuditListResponse { events })))
+}
+
+/// 计算有效余额和等级（考虑委托与继承）
+async fn compute_effective_balance_and_level(state: &Arc<ServerState>, address: &str) -> (u128, PermissionLevel) {
+    let balances = state.balances.read().await;
+    let delegations_to = state.delegations_to.read().await;
+    let inheritance_parent = state.inheritance_parent.read().await;
+
+    fn compute_inner(
+        balances: &HashMap<String, u128>,
+        delegations_to: &HashMap<String, Vec<String>>,
+        inheritance_parent: &HashMap<String, String>,
+        address: &str,
+        visiting: &mut HashSet<String>,
+    ) -> (u128, PermissionLevel) {
+        if !visiting.insert(address.to_string()) {
+            // cycle detected, treat as basic
+            return (0, PermissionLevel::Basic);
+        }
+
+        let mut balance = *balances.get(address).unwrap_or(&0);
+        if let Some(from_list) = delegations_to.get(address) {
+            for from in from_list.iter() {
+                balance = balance.saturating_add(*balances.get(from).unwrap_or(&0));
+            }
+        }
+        let mut level = determine_level(balance);
+        if let Some(parent) = inheritance_parent.get(address) {
+            let (_pb, parent_level) = compute_inner(balances, delegations_to, inheritance_parent, parent, visiting);
+            level = match (level, parent_level) {
+                (PermissionLevel::Admin, _) | (_, PermissionLevel::Admin) => PermissionLevel::Admin,
+                (PermissionLevel::Creator, _) | (_, PermissionLevel::Creator) => PermissionLevel::Creator,
+                _ => PermissionLevel::Basic,
+            };
+        }
+        visiting.remove(address);
+        (balance, level)
+    }
+
+    let mut visiting: HashSet<String> = HashSet::new();
+    compute_inner(&balances, &delegations_to, &inheritance_parent, address, &mut visiting)
+}
+
+async fn push_audit(state: &Arc<ServerState>, action: String, address: String, details: String) {
+    let mut logs = state.audit_logs.write().await;
+    logs.push(AuditEvent {
+        timestamp: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+        action,
+        address,
+        details,
+    });
 }
 
 /// 错误处理
@@ -391,6 +522,44 @@ fn create_routes(state: Arc<ServerState>) -> impl Filter<Extract = impl Reply> +
         .and(warp::body::json())
         .and(state_filter.clone())
         .and_then(|request: RevokePermissionRequest, state: Arc<ServerState>| async move { revoke_permission(state, request).await });
+
+    // 权限委托
+    let perm_delegate_route = warp::path!("permissions" / "delegate")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(|request: DelegatePermissionRequest, state: Arc<ServerState>| async move { delegate_permission(state, request).await });
+
+    // 取消委托
+    let perm_undelegate_route = warp::path!("permissions" / "undelegate")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(|request: DelegatePermissionRequest, state: Arc<ServerState>| async move { undelegate_permission(state, request).await });
+
+    // 设置继承
+    let perm_inherit_route = warp::path!("permissions" / "inherit")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(|request: InheritPermissionRequest, state: Arc<ServerState>| async move { inherit_permission(state, request).await });
+
+    // 取消继承
+    let perm_uninherit_route = warp::path!("permissions" / "uninherit")
+        .and(warp::post())
+        .and(warp::body::json())
+        .and(state_filter.clone())
+        .and_then(|request: UninheritPermissionRequest, state: Arc<ServerState>| async move { uninherit_permission(state, request).await });
+
+    // 审计日志
+    let perm_audit_route = warp::path!("permissions" / "audit")
+        .and(warp::get())
+        .and(warp::query::<HashMap<String, String>>())
+        .and(state_filter.clone())
+        .and_then(|q: HashMap<String, String>, state: Arc<ServerState>| async move {
+            let limit = q.get("limit").and_then(|v| v.parse::<usize>().ok());
+            list_audit_logs(state, limit).await
+        });
     
     // 获取会话
     let get_session_route = warp::path!("sessions" / String)
@@ -442,6 +611,11 @@ fn create_routes(state: Arc<ServerState>) -> impl Filter<Extract = impl Reply> +
         .or(perm_check_route)
         .or(perm_update_route)
         .or(perm_revoke_route)
+        .or(perm_delegate_route)
+        .or(perm_undelegate_route)
+        .or(perm_inherit_route)
+        .or(perm_uninherit_route)
+        .or(perm_audit_route)
         .recover(handle_rejection)
         .with(warp::cors().allow_any_origin())
 }
@@ -459,6 +633,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(ServerState {
         voting_system: Arc::new(RwLock::new(VotingSystem::new())),
         balances: Arc::new(RwLock::new(HashMap::new())),
+        delegations_to: Arc::new(RwLock::new(HashMap::new())),
+        inheritance_parent: Arc::new(RwLock::new(HashMap::new())),
+        audit_logs: Arc::new(RwLock::new(Vec::new())),
     });
     
     // 创建路由
@@ -493,7 +670,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_submit_commitment_decoding() {
-        let state = Arc::new(ServerState { voting_system: Arc::new(RwLock::new(VotingSystem::new())), balances: Arc::new(RwLock::new(HashMap::new())) });
+        let state = Arc::new(ServerState { voting_system: Arc::new(RwLock::new(VotingSystem::new())), balances: Arc::new(RwLock::new(HashMap::new())), delegations_to: Arc::new(RwLock::new(HashMap::new())), inheritance_parent: Arc::new(RwLock::new(HashMap::new())), audit_logs: Arc::new(RwLock::new(Vec::new())) });
 
         // create a session first
         let create_req = CreateSessionRequest {
@@ -517,7 +694,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_permission_update_and_revoke() {
-        let state = Arc::new(ServerState { voting_system: Arc::new(RwLock::new(VotingSystem::new())), balances: Arc::new(RwLock::new(HashMap::new())) });
+        let state = Arc::new(ServerState { voting_system: Arc::new(RwLock::new(VotingSystem::new())), balances: Arc::new(RwLock::new(HashMap::new())), delegations_to: Arc::new(RwLock::new(HashMap::new())), inheritance_parent: Arc::new(RwLock::new(HashMap::new())), audit_logs: Arc::new(RwLock::new(Vec::new())) });
 
         // update permission (balance)
         let up_req = UpdatePermissionRequest { address: "addr1".to_string(), balance: 1500 };
@@ -538,5 +715,29 @@ mod tests {
         let check_req2 = PermissionCheckRequest { address: "addr1".to_string(), min_level: PermissionLevel::Basic };
         let check_reply2 = check_permission(state.clone(), check_req2).await.unwrap().into_response();
         assert_eq!(check_reply2.status(), warp::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_permission_delegation_and_inheritance() {
+        let state = Arc::new(ServerState { voting_system: Arc::new(RwLock::new(VotingSystem::new())), balances: Arc::new(RwLock::new(HashMap::new())), delegations_to: Arc::new(RwLock::new(HashMap::new())), inheritance_parent: Arc::new(RwLock::new(HashMap::new())), audit_logs: Arc::new(RwLock::new(Vec::new())) });
+
+        // set balances
+        let _ = update_permission(state.clone(), UpdatePermissionRequest { address: "owner".into(), balance: 1200 }).await.unwrap();
+        let _ = update_permission(state.clone(), UpdatePermissionRequest { address: "child".into(), balance: 10 }).await.unwrap();
+
+        // delegate from owner -> addrA
+        let _ = delegate_permission(state.clone(), DelegatePermissionRequest { from: "owner".into(), to: "addrA".into() }).await.unwrap();
+        // addrA should reach Creator due to delegation
+        let reply = get_permission_level(state.clone(), "addrA".into()).await.unwrap().into_response();
+        assert_eq!(reply.status(), warp::http::StatusCode::OK);
+
+        // inheritance: child inherits from addrA
+        let _ = inherit_permission(state.clone(), InheritPermissionRequest { child: "child".into(), parent: "addrA".into() }).await.unwrap();
+        let reply2 = get_permission_level(state.clone(), "child".into()).await.unwrap().into_response();
+        assert_eq!(reply2.status(), warp::http::StatusCode::OK);
+
+        // audit list available
+        let resp = list_audit_logs(state.clone(), Some(10)).await.unwrap().into_response();
+        assert_eq!(resp.status(), warp::http::StatusCode::OK);
     }
 }
