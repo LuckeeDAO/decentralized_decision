@@ -27,10 +27,12 @@ mod nft_types;
 mod lottery_levels;
 mod lottery_config;
 mod selection_algorithms;
+mod serial_numbers;
 use nft_types::{NftTypeMeta, NftTypeRegistry, NftTypePluginRegistry, NoopPlugin};
 use lottery_levels::{LotteryLevel, LevelManager, ParticipantInfo, LevelStatus};
 use lottery_config::{ConfigManager};
 use selection_algorithms::{MultiTargetSelector};
+use serial_numbers::{SerialService, SerialPoolConfig};
 
 /// 服务器状态
 #[derive(Clone)]
@@ -82,6 +84,8 @@ struct ServerState {
     // 多目标选择器
     #[allow(dead_code)]
     multi_target_selector: Arc<RwLock<MultiTargetSelector>>,
+    // 序号服务
+    serials: Arc<RwLock<SerialService>>,
 }
 
 /// API请求结构
@@ -270,6 +274,7 @@ mod perm_tests {
             level_manager: Arc::new(RwLock::new(LevelManager::new().unwrap())),
             config_manager: Arc::new(RwLock::new(ConfigManager::new().unwrap())),
             multi_target_selector: Arc::new(RwLock::new(MultiTargetSelector::new())),
+            serials: Arc::new(RwLock::new(SerialService::new(SerialPoolConfig { pre_generate: 0, serial_hex_len: 16 }).await)),
         })
     }
 
@@ -345,6 +350,7 @@ mod integration_tests {
             level_manager: Arc::new(RwLock::new(LevelManager::new().unwrap())),
             config_manager: Arc::new(RwLock::new(ConfigManager::new().unwrap())),
             multi_target_selector: Arc::new(RwLock::new(MultiTargetSelector::new())),
+            serials: Arc::new(RwLock::new(SerialService::new(SerialPoolConfig { pre_generate: 0, serial_hex_len: 16 }).await)),
         })
     }
 
@@ -2843,6 +2849,90 @@ fn create_routes(state: Arc<ServerState>) -> impl Filter<Extract = impl Reply> +
             .boxed()
     };
 
+    // 序号服务 REST 接口
+    #[derive(Debug, Deserialize)]
+    struct SerialAllocReq { session_id: Option<String>, owner: Option<String>, hex_len: Option<usize> }
+    #[derive(Debug, Deserialize)]
+    struct SerialRecycleReq { serial: String }
+
+    async fn serial_allocate(state: Arc<ServerState>, req: SerialAllocReq) -> Result<impl Reply, Rejection> {
+        let hex_len = req.hex_len.unwrap_or(24);
+        let svc = state.serials.read().await.clone();
+        match svc.allocate(req.session_id, req.owner, hex_len).await {
+            Ok(r) => Ok(warp::reply::json(&ApiResponse::success(r))),
+            Err(e) => Ok(warp::reply::json(&ApiResponse::<()>::error(e))),
+        }
+    }
+
+    async fn serial_get(state: Arc<ServerState>, serial: String) -> Result<impl Reply, Rejection> {
+        let svc = state.serials.read().await.clone();
+        let rec = svc.get(&serial).await;
+        Ok(warp::reply::json(&ApiResponse::success(rec)))
+    }
+
+    async fn serial_recycle(state: Arc<ServerState>, req: SerialRecycleReq) -> Result<impl Reply, Rejection> {
+        let svc = state.serials.read().await.clone();
+        match svc.recycle(&req.serial).await {
+            Ok(()) => Ok(warp::reply::json(&ApiResponse::success(()))),
+            Err(e) => Ok(warp::reply::json(&ApiResponse::<()>::error(e))),
+        }
+    }
+
+    async fn serial_list_session(state: Arc<ServerState>, session_id: String) -> Result<impl Reply, Rejection> {
+        let svc = state.serials.read().await.clone();
+        let list = svc.list_by_session(&session_id).await;
+        Ok(warp::reply::json(&ApiResponse::success(list)))
+    }
+
+    async fn serial_stats(state: Arc<ServerState>) -> Result<impl Reply, Rejection> {
+        let svc = state.serials.read().await.clone();
+        let s = svc.stats().await;
+        Ok(warp::reply::json(&ApiResponse::success(s)))
+    }
+
+    let serial_allocate_route = {
+        let state = Arc::clone(&state);
+        warp::path!("serials" / "allocate")
+            .and(warp::post())
+            .and(warp::body::json())
+            .and(warp::any().map(move || Arc::clone(&state)))
+            .and_then(|req: SerialAllocReq, state: Arc<ServerState>| async move { serial_allocate(state, req).await })
+            .boxed()
+    };
+    let serial_get_route = {
+        let state = Arc::clone(&state);
+        warp::path!("serials" / String)
+            .and(warp::get())
+            .and(warp::any().map(move || Arc::clone(&state)))
+            .and_then(|serial: String, state: Arc<ServerState>| async move { serial_get(state, serial).await })
+            .boxed()
+    };
+    let serial_recycle_route = {
+        let state = Arc::clone(&state);
+        warp::path!("serials" / "recycle")
+            .and(warp::post())
+            .and(warp::body::json())
+            .and(warp::any().map(move || Arc::clone(&state)))
+            .and_then(|req: SerialRecycleReq, state: Arc<ServerState>| async move { serial_recycle(state, req).await })
+            .boxed()
+    };
+    let serial_list_session_route = {
+        let state = Arc::clone(&state);
+        warp::path!("serials" / "session" / String)
+            .and(warp::get())
+            .and(warp::any().map(move || Arc::clone(&state)))
+            .and_then(|session_id: String, state: Arc<ServerState>| async move { serial_list_session(state, session_id).await })
+            .boxed()
+    };
+    let serial_stats_route = {
+        let state = Arc::clone(&state);
+        warp::path!("serials" / "stats")
+            .and(warp::get())
+            .and(warp::any().map(move || Arc::clone(&state)))
+            .and_then(|state: Arc<ServerState>| async move { serial_stats(state).await })
+            .boxed()
+    };
+
     // 简化路由组合 - 使用 boxed 路由避免类型推断问题
     let all_routes = health_route
         .or(metrics_route)
@@ -2922,7 +3012,12 @@ fn create_routes(state: Arc<ServerState>) -> impl Filter<Extract = impl Reply> +
         .or(perm_audit_route)
         .or(ipfs_upload_route)
         .or(ipfs_verify_route)
-        .or(ipfs_get_route);
+        .or(ipfs_get_route)
+        .or(serial_allocate_route)
+        .or(serial_get_route)
+        .or(serial_recycle_route)
+        .or(serial_list_session_route)
+        .or(serial_stats_route);
 
     all_routes.recover(handle_rejection)
         .with(warp::cors().allow_any_origin())
@@ -2987,6 +3082,7 @@ async fn main() {
         level_manager: Arc::new(RwLock::new(LevelManager::new().unwrap())),
         config_manager: Arc::new(RwLock::new(ConfigManager::new().unwrap())),
         multi_target_selector: Arc::new(RwLock::new(MultiTargetSelector::new())),
+        serials: Arc::new(RwLock::new(SerialService::new(SerialPoolConfig { pre_generate: 16, serial_hex_len: 24 }).await)),
     });
     
     // 创建路由
@@ -3046,6 +3142,7 @@ mod tests {
             level_manager: Arc::new(RwLock::new(LevelManager::new().unwrap())),
             config_manager: Arc::new(RwLock::new(ConfigManager::new().unwrap())),
             multi_target_selector: Arc::new(RwLock::new(MultiTargetSelector::new())),
+            serials: Arc::new(RwLock::new(SerialService::new(SerialPoolConfig { pre_generate: 0, serial_hex_len: 16 }).await)),
         });
 
         // create a session first
@@ -3095,6 +3192,7 @@ mod tests {
             level_manager: Arc::new(RwLock::new(LevelManager::new().unwrap())),
             config_manager: Arc::new(RwLock::new(ConfigManager::new().unwrap())),
             multi_target_selector: Arc::new(RwLock::new(MultiTargetSelector::new())),
+            serials: Arc::new(RwLock::new(SerialService::new(SerialPoolConfig { pre_generate: 0, serial_hex_len: 16 }).await)),
         });
 
         // update permission (balance)
@@ -3145,6 +3243,7 @@ mod tests {
             level_manager: Arc::new(RwLock::new(LevelManager::new().unwrap())),
             config_manager: Arc::new(RwLock::new(ConfigManager::new().unwrap())),
             multi_target_selector: Arc::new(RwLock::new(MultiTargetSelector::new())),
+            serials: Arc::new(RwLock::new(SerialService::new(SerialPoolConfig { pre_generate: 0, serial_hex_len: 16 }).await)),
         });
 
         // ipfs upload + verify roundtrip
@@ -3199,6 +3298,7 @@ mod tests {
             level_manager: Arc::new(RwLock::new(LevelManager::new().unwrap())),
             config_manager: Arc::new(RwLock::new(ConfigManager::new().unwrap())),
             multi_target_selector: Arc::new(RwLock::new(MultiTargetSelector::new())),
+            serials: Arc::new(RwLock::new(SerialService::new(SerialPoolConfig { pre_generate: 0, serial_hex_len: 16 }).await)),
         });
 
         // register nft type with schema
