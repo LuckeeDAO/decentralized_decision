@@ -139,3 +139,76 @@ impl TypeInterface for NftTypeDef {
 }
 
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_schema_v1() -> serde_json::Value {
+        serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "prize": {"type": "integer"}
+            },
+            "required": ["name", "prize"]
+        })
+    }
+
+    fn sample_schema_v2() -> serde_json::Value {
+        serde_json::json!({
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "prize": {"type": "integer"},
+                "category": {"type": "string"}
+            },
+            "required": ["name", "prize"]
+        })
+    }
+
+    #[test]
+    fn test_registry_register_version_and_rollback() {
+        let mut reg = NftTypeRegistry::new();
+        let meta = NftTypeMeta { type_id: "lottery".into(), name: "抽奖".into(), category: "抽奖".into(), required_level: Some("creator".into()) };
+        let now = 1_700_000_000u64;
+
+        // register v1
+        let def = reg.register_or_update(meta.clone(), sample_schema_v1(), now);
+        assert_eq!(def.meta.type_id, "lottery");
+        assert_eq!(def.versions.len(), 1);
+        assert_eq!(def.versions[0].version, 1);
+
+        // register v2
+        let def2 = reg.register_or_update(meta.clone(), sample_schema_v2(), now + 10);
+        assert_eq!(def2.versions.len(), 2);
+        assert_eq!(def2.versions[1].version, 2);
+
+        // list versions
+        let vers = reg.list_versions("lottery").unwrap();
+        assert_eq!(vers.len(), 2);
+
+        // rollback to v1
+        let rolled = reg.rollback_to_version("lottery", 1).unwrap();
+        assert_eq!(rolled.versions.len(), 1);
+        assert_eq!(rolled.versions[0].version, 1);
+    }
+
+    #[test]
+    fn test_schema_validation() {
+        let mut reg = NftTypeRegistry::new();
+        let meta = NftTypeMeta { type_id: "lottery".into(), name: "抽奖".into(), category: "抽奖".into(), required_level: None };
+        let _ = reg.register_or_update(meta.clone(), sample_schema_v1(), 1_700_000_000);
+        let def = reg.get("lottery").unwrap();
+
+        // valid data
+        let data_ok = serde_json::json!({"name": "A", "prize": 100});
+        assert!(def.validate_with_latest(&data_ok).is_ok());
+
+        // invalid data: missing prize
+        let data_bad = serde_json::json!({"name": "A"});
+        assert!(def.validate_with_latest(&data_bad).is_err());
+    }
+}
+

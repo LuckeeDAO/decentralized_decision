@@ -13,7 +13,7 @@ pub struct IpfsClient {
 
 impl IpfsClient {
     /// 创建新的IPFS客户端
-    pub async fn new(ipfs_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(ipfs_url: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()?;
@@ -24,8 +24,13 @@ impl IpfsClient {
         })
     }
     
+    /// 获取基础URL
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+    
     /// 添加数据到IPFS
-    pub async fn add_data(&self, data: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
+    pub async fn add_data(&self, data: &[u8]) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let url = format!("{}/api/v0/add", self.base_url);
         
         let form = reqwest::multipart::Form::new()
@@ -46,7 +51,7 @@ impl IpfsClient {
     }
     
     /// 从IPFS获取数据
-    pub async fn get_data(&self, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    pub async fn get_data(&self, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let url = format!("{}/api/v0/cat?arg={}", self.base_url, cid);
         
         let response = self.client
@@ -63,7 +68,7 @@ impl IpfsClient {
     }
     
     /// 验证CID
-    pub async fn verify_cid(&self, cid: &str, data: &[u8]) -> Result<bool, Box<dyn std::error::Error>> {
+    pub async fn verify_cid(&self, cid: &str, data: &[u8]) -> Result<bool, Box<dyn std::error::Error + Send + Sync + 'static>> {
         // 使用 IPFS add 接口的 only-hash 选项计算给定数据的CID而不实际存储
         // 参考: /api/v0/add?only-hash=true&pin=false
         let url = format!("{}/api/v0/add?only-hash=true&pin=false", self.base_url);
@@ -88,7 +93,7 @@ impl IpfsClient {
     }
     
     /// 获取节点信息
-    pub async fn get_node_info(&self) -> Result<NodeInfo, Box<dyn std::error::Error>> {
+    pub async fn get_node_info(&self) -> Result<NodeInfo, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let url = format!("{}/api/v0/id", self.base_url);
         
         let response = self.client
@@ -105,7 +110,7 @@ impl IpfsClient {
     }
     
     /// 检查IPFS节点是否可用
-    pub async fn ping(&self) -> Result<bool, Box<dyn std::error::Error>> {
+    pub async fn ping(&self) -> Result<bool, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let url = format!("{}/api/v0/version", self.base_url);
         
         let response = self.client
@@ -120,7 +125,7 @@ impl IpfsClient {
     }
     
     /// 获取IPFS版本信息
-    pub async fn get_version(&self) -> Result<String, Box<dyn std::error::Error>> {
+    pub async fn get_version(&self) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let url = format!("{}/api/v0/version", self.base_url);
         
         let response = self.client
@@ -142,7 +147,7 @@ impl IpfsClient {
     }
     
     /// 获取存储统计信息
-    pub async fn get_repo_stats(&self) -> Result<Value, Box<dyn std::error::Error>> {
+    pub async fn get_repo_stats(&self) -> Result<Value, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let url = format!("{}/api/v0/repo/stat", self.base_url);
         
         let response = self.client

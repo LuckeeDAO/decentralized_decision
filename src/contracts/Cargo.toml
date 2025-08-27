@@ -26,3 +26,11 @@ cw20 = "1.1"
 cw20-base = "1.1"
 cw721 = "0.18"
 cw721-base = "0.18"
+
+[features]
+default = []
+# 最小事件：减少链上事件属性，帮助降低Gas
+minimal_events = []
+
+[dev-dependencies]
+cw-multi-test.workspace = true

@@ -28,7 +28,7 @@ pub struct IpfsManager {
 
 impl IpfsManager {
     /// 创建新的IPFS管理器
-    pub async fn new(ipfs_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub async fn new(ipfs_url: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let client = client::IpfsClient::new(ipfs_url).await?;
         Ok(Self {
             client,
@@ -40,7 +40,7 @@ impl IpfsManager {
         })
     }
     /// 添加冗余镜像节点
-    pub async fn add_mirror(&mut self, ipfs_url: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub async fn add_mirror(&mut self, ipfs_url: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         let cli = client::IpfsClient::new(ipfs_url).await?;
         self.mirrors.push(cli);
         Ok(())
@@ -49,7 +49,7 @@ impl IpfsManager {
     pub fn set_compression(&mut self, enabled: bool) { self.compress_enabled = enabled; }
     
     /// 上传数据到IPFS
-    pub async fn upload_data(&mut self, data: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
+    pub async fn upload_data(&mut self, data: &[u8]) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let payload: Vec<u8> = if self.compress_enabled {
             let mut enc = GzEncoder::new(Vec::new(), Compression::default());
             enc.write_all(data)?;
@@ -65,7 +65,7 @@ impl IpfsManager {
             let mut entries: Vec<(String, String)> = Vec::new();
             for m in &self.mirrors {
                 if let Ok(mcid) = m.add_data(&payload).await {
-                    entries.push((mcid, m.base_url.clone()));
+                    entries.push((mcid, m.base_url().to_string()));
                 }
             }
             if !entries.is_empty() {
@@ -77,27 +77,48 @@ impl IpfsManager {
     }
     
     /// 从IPFS下载数据
-    pub async fn download_data(&mut self, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    pub async fn download_data(&mut self, cid: &str) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync + 'static>> {
         // 先检查缓存
         if let Some(data) = self.cache.get(cid) {
             self.stats.record_download(data.len() as u64, true);
             return Ok(data.clone());
         }
         
-        // 从IPFS下载（主节点）
-        let mut data = self.client.get_data(cid).await.or_else(|_| async {
-            // 尝试从镜像拉取
-            for (mcid, _url) in self.mirror_index.get(cid).cloned().unwrap_or_default() {
-                for m in &self.mirrors {
-                    if let Ok(bytes) = m.get_data(&mcid).await { return Ok(bytes); }
+        // 从IPFS下载（主节点），失败则尝试镜像
+        let mut data: Vec<u8> = if let Ok(bytes) = self.client.get_data(cid).await {
+            bytes
+        } else {
+            // 先根据镜像索引尝试
+            let mut maybe_bytes: Option<Vec<u8>> = None;
+            if let Some(entries) = self.mirror_index.get(cid).cloned() {
+                'outer: for (mcid, _url) in entries.into_iter() {
+                    for m in &self.mirrors {
+                        if let Ok(bytes) = m.get_data(&mcid).await {
+                            maybe_bytes = Some(bytes);
+                            break 'outer;
+                        }
+                    }
                 }
             }
-            // 如果没有镜像索引，逐一尝试
-            for m in &self.mirrors {
-                if let Ok(bytes) = m.get_data(cid).await { return Ok(bytes); }
+            // 若未命中索引，则逐一用原cid尝试
+            if maybe_bytes.is_none() {
+                for m in &self.mirrors {
+                    if let Ok(bytes) = m.get_data(cid).await {
+                        maybe_bytes = Some(bytes);
+                        break;
+                    }
+                }
             }
-            Err::<Vec<u8>, Box<dyn std::error::Error>>(Box::new(std::io::Error::new(std::io::ErrorKind::Other, "download failed")))
-        }.await)?;
+            match maybe_bytes {
+                Some(bytes) => bytes,
+                None => {
+                    return Err(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        "download failed",
+                    )));
+                }
+            }
+        };
         // 若启用压缩，尝试解压
         if self.compress_enabled {
             let mut decoder = GzDecoder::new(&data[..]);
@@ -115,7 +136,7 @@ impl IpfsManager {
     }
     
     /// 验证数据完整性
-    pub async fn verify_data(&self, cid: &str, data: &[u8]) -> Result<bool, Box<dyn std::error::Error>> {
+    pub async fn verify_data(&self, cid: &str, data: &[u8]) -> Result<bool, Box<dyn std::error::Error + Send + Sync + 'static>> {
         let primary = self.client.verify_cid(cid, data).await.unwrap_or(false);
         if !primary { return Ok(false); }
         // 校验镜像一致性：如果记录了镜像，逐一验证
@@ -129,7 +150,7 @@ impl IpfsManager {
     }
     
     /// 获取IPFS节点信息
-    pub async fn get_node_info(&self) -> Result<types::NodeInfo, Box<dyn std::error::Error>> {
+    pub async fn get_node_info(&self) -> Result<types::NodeInfo, Box<dyn std::error::Error + Send + Sync + 'static>> {
         self.client.get_node_info().await
     }
     
@@ -172,7 +193,7 @@ impl IpfsManager {
     }
 
     /// 导入缓存（用于恢复）
-    pub fn import_cache(&mut self, items: Vec<(String, String)>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn import_cache(&mut self, items: Vec<(String, String)>) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         for (cid, b64) in items.into_iter() {
             let bytes = base64::engine::general_purpose::STANDARD.decode(b64.as_bytes())?;
             self.cache.insert(cid, bytes);
@@ -181,7 +202,7 @@ impl IpfsManager {
     }
 
     /// 将缓存归档到本地文件
-    pub fn archive_to_file(&self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn archive_to_file(&self, path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         let items = self.export_cache();
         let json = serde_json::to_vec(&items)?;
         std::fs::write(path, json)?;
@@ -189,7 +210,7 @@ impl IpfsManager {
     }
 
     /// 从本地文件导入归档
-    pub fn restore_from_file(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn restore_from_file(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
         let bytes = std::fs::read(path)?;
         let items: Vec<(String, String)> = serde_json::from_slice(&bytes)?;
         self.import_cache(items)
@@ -202,7 +223,7 @@ pub fn export_cache(manager: &IpfsManager) -> Vec<(String, String)> {
 }
 
 /// 导入缓存到指定管理器（自由函数封装，便于跨crate调用）
-pub fn import_cache(manager: &mut IpfsManager, items: Vec<(String, String)>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn import_cache(manager: &mut IpfsManager, items: Vec<(String, String)>) -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>> {
     manager.import_cache(items)
 }
 

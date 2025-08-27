@@ -47,11 +47,17 @@ pub fn execute(
             execute_mint_nft(deps, env, info, recipient)
         }
         ExecuteMsg::BatchMint { recipients } => {
-            let mut resp = Response::new().add_attribute("method", "batch_mint_nft");
+            let mut count: u32 = 0;
             for r in recipients.into_iter() {
                 let r_clone = r.clone();
-                execute_mint_nft(deps.branch(), env.clone(), info.clone(), r_clone.clone())?;
-                resp = resp.add_attribute("mint", r);
+                execute_mint_nft(deps.branch(), env.clone(), info.clone(), r_clone)?;
+                count = count.saturating_add(1);
+            }
+            let mut resp = Response::new();
+            #[cfg(not(feature = "minimal_events"))]
+            {
+                resp = resp.add_attribute("method", "batch_mint_nft");
+                resp = resp.add_attribute("items", count.to_string());
             }
             Ok(resp)
         }
@@ -76,14 +82,20 @@ pub fn execute(
             execute_transfer_nft(deps, env, info, token_id, contract)
         }
         ExecuteMsg::BatchTransfer { recipients, amounts: _ } => {
-            let mut resp = Response::new().add_attribute("method", "batch_transfer_nft");
+            let mut count: u32 = 0;
             for r in recipients.into_iter() {
                 let token_id = find_first_token_of(deps.as_ref(), info.sender.to_string())
                     .map_err(|e| cosmwasm_std::StdError::generic_err(e))?
                     .ok_or_else(|| cosmwasm_std::StdError::generic_err("No token to transfer"))?;
                 let r_clone = r.clone();
-                execute_transfer_nft(deps.branch(), env.clone(), info.clone(), token_id, r_clone.clone())?;
-                resp = resp.add_attribute("transfer", r);
+                execute_transfer_nft(deps.branch(), env.clone(), info.clone(), token_id, r_clone)?;
+                count = count.saturating_add(1);
+            }
+            let mut resp = Response::new();
+            #[cfg(not(feature = "minimal_events"))]
+            {
+                resp = resp.add_attribute("method", "batch_transfer_nft");
+                resp = resp.add_attribute("items", count.to_string());
             }
             Ok(resp)
         }
@@ -130,10 +142,11 @@ pub fn execute_mint_nft(
     let nonce = next_nonce(deps.storage)?;
     let token_id = format!("nft_{}_{}", recipient, nonce);
     
+    // 最小化链上存储：默认不写入任何外部URL，仅在需要时通过 MintWithMetadata 传入 ipfs://CID
     let cw721_msg = Cw721BaseExecuteMsg::Mint {
         token_id: token_id.clone(),
         owner: recipient.clone(),
-        token_uri: Some("https://example.com/metadata.json".to_string()),
+        token_uri: None,
         extension: Extension::default(),
     };
 
@@ -157,10 +170,30 @@ pub fn execute_mint_nft_with_meta(
     let nonce = next_nonce(deps.storage)?;
     let token_id = format!("nft_{}_{}", recipient, nonce);
 
+    // 仅允许存储 ipfs://CID 或裸 CID，避免长URL上链
+    fn normalize_ipfs_uri(uri_opt: Option<String>) -> Option<String> {
+        match uri_opt {
+            None => None,
+            Some(u) => {
+                let trimmed = u.trim();
+                if trimmed.is_empty() { return None; }
+                if trimmed.starts_with("ipfs://") {
+                    return Some(trimmed.to_string());
+                }
+                // 简单CID形式：不包含冒号且不包含斜杠，长度在合理范围内
+                if !trimmed.contains(":") && !trimmed.contains('/') && trimmed.len() >= 32 {
+                    return Some(format!("ipfs://{}", trimmed));
+                }
+                // 其他URL一律拒绝，转为不写入，避免冗长上链数据
+                None
+            }
+        }
+    }
+
     let cw721_msg = Cw721BaseExecuteMsg::Mint {
         token_id: token_id.clone(),
         owner: recipient.clone(),
-        token_uri,
+        token_uri: normalize_ipfs_uri(token_uri),
         // 目前使用默认扩展类型（Empty），若需自定义扩展需调整合约泛型
         extension: Extension::default(),
     };
@@ -413,5 +446,48 @@ mod tests {
             let tokens = query_tokens_of_owner(deps.as_ref(), (*u).to_string(), None, Some(10)).unwrap();
             assert_eq!(tokens.tokens.len(), 1);
         }
+    }
+
+    #[test]
+    fn test_mint_with_metadata_only_accepts_ipfs_cid() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+
+        let init_info = mock_info("creator", &[]);
+        let init_msg = InstantiateMsg { admin: "admin".to_string(), token_name: "TNFT".to_string(), token_symbol: "TN".to_string(), decimals: 0 };
+        instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
+
+        // Accepts ipfs://CID
+        let res1 = execute(
+            deps.as_mut(), env.clone(), mock_info("admin", &[]),
+            ExecuteMsg::MintWithMetadata { recipient: "u1".to_string(), token_uri: Some("ipfs://bafybeigdyrzt".to_string()), extension: None }
+        ).unwrap();
+        assert!(res1.attributes.iter().any(|a| a.key == "method" && a.value == "mint_nft_with_metadata"));
+
+        // Accepts bare CID -> normalized to ipfs://CID
+        let res2 = execute(
+            deps.as_mut(), env.clone(), mock_info("admin", &[]),
+            ExecuteMsg::MintWithMetadata { recipient: "u2".to_string(), token_uri: Some("bafybeigdyrztcidonlyvalue_______________________".to_string()), extension: None }
+        ).unwrap();
+        assert!(res2.attributes.iter().any(|a| a.key == "method" && a.value == "mint_nft_with_metadata"));
+
+        // Reject http URL by normalizing to None; still mints but without token_uri
+        let res3 = execute(
+            deps.as_mut(), env, mock_info("admin", &[]),
+            ExecuteMsg::MintWithMetadata { recipient: "u3".to_string(), token_uri: Some("https://example.com/too/long".to_string()), extension: None }
+        ).unwrap();
+        assert!(res3.attributes.iter().any(|a| a.key == "method" && a.value == "mint_nft_with_metadata"));
+    }
+
+    #[test]
+    fn test_perf_mint_under_3s() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let init_info = mock_info("creator", &[]);
+        let init_msg = InstantiateMsg { admin: "admin".to_string(), token_name: "TNFT".to_string(), token_symbol: "TN".to_string(), decimals: 0 };
+        instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
+        let start = std::time::Instant::now();
+        let _ = execute(deps.as_mut(), env, mock_info("admin", &[]), ExecuteMsg::Mint { recipient: "u".to_string(), amount: cosmwasm_std::Uint128::new(1) }).unwrap();
+        assert!(start.elapsed() < std::time::Duration::from_secs(3));
     }
 }

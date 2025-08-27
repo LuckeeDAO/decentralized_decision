@@ -296,10 +296,16 @@ pub fn execute_batch_transfer(
     if recipients.len() != amounts.len() {
         return Err(cosmwasm_std::StdError::generic_err("Recipients and amounts length mismatch"));
     }
-    let mut resp = Response::new().add_attribute("method", "batch_transfer");
+    let mut count: u32 = 0;
     for (rcp, amt) in recipients.into_iter().zip(amounts.into_iter()) {
-        let _ = execute_transfer(deps.branch(), env.clone(), info.clone(), rcp.clone(), amt)?;
-        resp = resp.add_attribute("transfer", format!("{}:{}", rcp, amt));
+        let _ = execute_transfer(deps.branch(), env.clone(), info.clone(), rcp, amt)?;
+        count = count.saturating_add(1);
+    }
+    let mut resp = Response::new();
+    #[cfg(not(feature = "minimal_events"))]
+    {
+        resp = resp.add_attribute("method", "batch_transfer");
+        resp = resp.add_attribute("items", count.to_string());
     }
     Ok(resp)
 }
@@ -310,10 +316,16 @@ pub fn execute_batch_burn(
     info: MessageInfo,
     amounts: Vec<Uint128>,
 ) -> StdResult<Response> {
-    let mut resp = Response::new().add_attribute("method", "batch_burn");
+    let mut count: u32 = 0;
     for amt in amounts.into_iter() {
         let _ = execute_burn(deps.branch(), env.clone(), info.clone(), amt)?;
-        resp = resp.add_attribute("burn", format!("{}", amt));
+        count = count.saturating_add(1);
+    }
+    let mut resp = Response::new();
+    #[cfg(not(feature = "minimal_events"))]
+    {
+        resp = resp.add_attribute("method", "batch_burn");
+        resp = resp.add_attribute("items", count.to_string());
     }
     Ok(resp)
 }
@@ -593,5 +605,73 @@ mod tests {
             ExecuteMsg::BatchBurn { amounts: vec![Uint128::new(10), Uint128::new(5)] }
         ).unwrap();
         assert!(res.attributes.iter().any(|a| a.key == "method" && a.value == "batch_burn"));
+    }
+
+    #[test]
+    fn test_stake_lock_unlock_unstake_and_claim() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+
+        // instantiate
+        let init_info = mock_info("creator", &[]);
+        let init_msg = InstantiateMsg { admin: "admin".to_string(), token_name: "Token".to_string(), token_symbol: "TOK".to_string(), decimals: 6 };
+        instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
+
+        // mint to alice
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            mock_info("admin", &[]),
+            ExecuteMsg::Mint { recipient: "alice".to_string(), amount: Uint128::new(1_000) }
+        ).unwrap();
+
+        // alice stakes 400
+        let _ = execute(
+            deps.as_mut(), env.clone(), mock_info("alice", &[]), ExecuteMsg::Stake { amount: Uint128::new(400) }
+        ).unwrap();
+
+        // lock 100 of the staked
+        let _ = execute(
+            deps.as_mut(), env.clone(), mock_info("alice", &[]), ExecuteMsg::Lock { amount: Uint128::new(100) }
+        ).unwrap();
+
+        // unlock 50 back to staked
+        let _ = execute(
+            deps.as_mut(), env.clone(), mock_info("alice", &[]), ExecuteMsg::Unlock { amount: Uint128::new(50) }
+        ).unwrap();
+
+        // query staking info
+        let info = query_staking_info(deps.as_ref(), "alice".to_string()).unwrap();
+        assert_eq!(info.staked, Uint128::new(350));
+        assert_eq!(info.locked, Uint128::new(50));
+
+        // claim reward (may be zero in mocked env time)
+        let _ = execute(
+            deps.as_mut(), env.clone(), mock_info("alice", &[]), ExecuteMsg::ClaimReward {}
+        ).unwrap();
+
+        // unstake 200
+        let _ = execute(
+            deps.as_mut(), env, mock_info("alice", &[]), ExecuteMsg::Unstake { amount: Uint128::new(200) }
+        ).unwrap();
+
+        // verify staking reduced
+        let info2 = query_staking_info(deps.as_ref(), "alice".to_string()).unwrap();
+        assert_eq!(info2.staked, Uint128::new(150));
+    }
+
+    #[test]
+    fn test_query_balance_under_500ms() {
+        let mut deps = mock_dependencies();
+        let env = mock_env();
+        let init_info = mock_info("creator", &[]);
+        let init_msg = InstantiateMsg { admin: "admin".to_string(), token_name: "Token".to_string(), token_symbol: "TOK".to_string(), decimals: 6 };
+        instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
+        execute(
+            deps.as_mut(), env.clone(), mock_info("admin", &[]), ExecuteMsg::Mint { recipient: "alice".to_string(), amount: Uint128::new(1_000) }
+        ).unwrap();
+        let start = std::time::Instant::now();
+        let _ = query_balance(deps.as_ref(), "alice".to_string()).unwrap();
+        assert!(start.elapsed() < std::time::Duration::from_millis(500));
     }
 }
