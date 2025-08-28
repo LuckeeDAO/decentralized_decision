@@ -39,6 +39,7 @@ pub struct NftTypeRegistry {
 impl NftTypeRegistry {
     pub fn new() -> Self { Self { types: HashMap::new() } }
 
+    #[allow(dead_code)]
     pub fn list(&self) -> Vec<NftTypeMeta> {
         self.types.values().map(|d| d.meta.clone()).collect()
     }
@@ -47,6 +48,7 @@ impl NftTypeRegistry {
         self.types.get(type_id).cloned()
     }
 
+    #[allow(dead_code)]
     pub fn register_or_update(&mut self, meta: NftTypeMeta, schema: serde_json::Value, now: u64) -> &NftTypeDef {
         let entry = self.types.entry(meta.type_id.clone()).or_insert(NftTypeDef { meta: meta.clone(), versions: Vec::new() });
         let next_ver: u32 = entry.versions.last().map(|v| v.version + 1).unwrap_or(1);
@@ -55,14 +57,17 @@ impl NftTypeRegistry {
         entry
     }
 
+    #[allow(dead_code)]
     pub fn list_versions(&self, type_id: &str) -> Option<Vec<(u32, u64)>> {
         self.types.get(type_id).map(|def| def.versions.iter().map(|v| (v.version, v.timestamp)).collect())
     }
 
+    #[allow(dead_code)]
     pub fn get_schema_by_version(&self, type_id: &str, version: u32) -> Option<serde_json::Value> {
         self.types.get(type_id).and_then(|def| def.versions.iter().find(|v| v.version == version).map(|v| v.schema.clone()))
     }
 
+    #[allow(dead_code)]
     pub fn rollback_to_version(&mut self, type_id: &str, version: u32) -> Result<&NftTypeDef, String> {
         let def = self.types.get_mut(type_id).ok_or_else(|| "未找到类型".to_string())?;
         // 确认存在该版本
@@ -77,6 +82,7 @@ impl NftTypeRegistry {
 /// NFT 类型插件接口（插件化扩展）
 pub trait NftTypePlugin: Send + Sync {
     /// 自定义的元数据附加校验（在Schema校验之后调用）
+    #[allow(dead_code)]
     fn on_validate_metadata(&self, _metadata: &serde_json::Value) -> Result<(), String> { Ok(()) }
     /// 配置存储前的业务校验钩子（如抽奖配置的业务规则）
     fn on_before_store_config(&self, _config: &serde_json::Value) -> Result<(), String> { Ok(()) }
@@ -95,6 +101,7 @@ pub struct NftTypePluginRegistry {
 impl NftTypePluginRegistry {
     pub fn new() -> Self { Self { plugins: HashMap::new() } }
 
+    #[allow(dead_code)]
     pub fn register(&mut self, type_id: String, plugin: Arc<dyn NftTypePlugin>) {
         self.plugins.insert(type_id, plugin);
     }

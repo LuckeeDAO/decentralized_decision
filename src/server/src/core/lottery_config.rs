@@ -485,7 +485,33 @@ impl Default for LotteryLevelConfig {
             description: String::new(),
             version: 1,
             status: ConfigStatus::Draft,
-            levels: Vec::new(),
+            levels: vec![
+                LevelConfig {
+                    id: "default".to_string(),
+                    name: "default".to_string(),
+                    description: String::new(),
+                    priority: 1,
+                    weight: 1.0,
+                    parameters: LevelParameters {
+                        min_participants: 1,
+                        max_participants: None,
+                        winner_count: 1,
+                        selection_algorithm: SelectionAlgorithm::Random,
+                        algorithm_params: HashMap::new(),
+                        time_limit: None,
+                        cost_limit: None,
+                    },
+                    permissions: LevelPermissions {
+                        min_balance: 0,
+                        min_stake: 0,
+                        min_holding_time: 0,
+                        required_nft_types: Vec::new(),
+                        required_permission_level: None,
+                        blacklisted_addresses: Vec::new(),
+                        whitelisted_addresses: Vec::new(),
+                    },
+                }
+            ],
             global_params: GlobalParameters {
                 max_total_participants: None,
                 max_total_winners: None,

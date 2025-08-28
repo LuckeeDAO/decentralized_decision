@@ -7,6 +7,10 @@ description = "基于比特承诺模型的去中心化投票系统 - 服务器�
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "luckee_voting_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "server"
 path = "src/main.rs"

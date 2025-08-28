@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
 use sha2::{Sha256, Digest};
-use crate::lottery_config::{SelectionAlgorithm, LevelParameters};
+use crate::core::lottery_config::{SelectionAlgorithm, LevelParameters};
 
 /// 参与者信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -86,6 +86,9 @@ impl Selector for RandomSelector {
             .cloned()
             .collect();
         
+        if params.winner_count == 0 {
+            return Err("中奖者数量必须大于0".to_string());
+        }
         if valid_participants.len() < params.winner_count as usize {
             return Err("参与者数量不足".to_string());
         }
@@ -185,6 +188,9 @@ impl Selector for WeightedRandomSelector {
             .cloned()
             .collect();
         
+        if params.winner_count == 0 {
+            return Err("中奖者数量必须大于0".to_string());
+        }
         if valid_participants.len() < params.winner_count as usize {
             return Err("参与者数量不足".to_string());
         }
@@ -306,6 +312,9 @@ impl Selector for TournamentSelector {
             .cloned()
             .collect();
         
+        if params.winner_count == 0 {
+            return Err("中奖者数量必须大于0".to_string());
+        }
         if valid_participants.len() < params.winner_count as usize {
             return Err("参与者数量不足".to_string());
         }
@@ -472,7 +481,7 @@ impl MultiTargetSelector {
         sorted_levels.sort_by(|a, b| a.1.min_participants.cmp(&b.1.min_participants));
         
         for (level, params) in sorted_levels {
-            let selector = self.selectors.get(level)
+            let selector = self.selectors.get::<str>(level)
                 .ok_or_else(|| format!("未找到等级{}的选择器", level))?;
             
             // 过滤该等级的参与者
@@ -496,7 +505,7 @@ impl MultiTargetSelector {
                 }
             }
             
-            results.insert(level.clone(), result);
+            results.insert(level.to_string(), result);
         }
         
         Ok(results)
@@ -514,7 +523,7 @@ impl MultiTargetSelector {
             let params = level_params.get(level)
                 .ok_or_else(|| format!("未找到等级{}的参数", level))?;
             
-            let selector = self.selectors.get(level)
+            let selector = self.selectors.get::<str>(level)
                 .ok_or_else(|| format!("未找到等级{}的选择器", level))?;
             
             if !selector.verify(result, participants, params)? {
@@ -529,7 +538,7 @@ impl MultiTargetSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lottery_config::SelectionAlgorithm;
+    use crate::core::lottery_config::SelectionAlgorithm;
 
     #[test]
     fn test_random_selector() {
@@ -690,5 +699,40 @@ mod tests {
             time_limit: None,
             cost_limit: None,
         }, "test").is_err()); // Should fail due to insufficient participants, but not due to creation
+    }
+
+    #[test]
+    fn test_algorithm_execution_time_n1000_k100_under_5s() {
+        let selector = RandomSelector;
+        let n = 1000usize;
+        let k = 100u32;
+
+        let mut participants = Vec::with_capacity(n);
+        for i in 0..n {
+            participants.push(Participant {
+                id: (i + 1).to_string(),
+                address: format!("addr{}", i + 1),
+                weight: 1.0,
+                level: "L1".to_string(),
+                attributes: HashMap::new(),
+                is_winner: false,
+            });
+        }
+
+        let params = LevelParameters {
+            min_participants: n as u32,
+            max_participants: None,
+            winner_count: k,
+            selection_algorithm: SelectionAlgorithm::Random,
+            algorithm_params: HashMap::new(),
+            time_limit: None,
+            cost_limit: None,
+        };
+
+        let start = std::time::Instant::now();
+        let result = selector.select(&participants, &params, "perf_seed").unwrap();
+        let elapsed = start.elapsed();
+        assert_eq!(result.winners.len(), k as usize);
+        assert!(elapsed.as_secs_f64() < 5.0, "execution took {:?}", elapsed);
     }
 }
