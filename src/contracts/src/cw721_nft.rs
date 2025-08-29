@@ -460,21 +460,21 @@ mod tests {
         // Accepts ipfs://CID
         let res1 = execute(
             deps.as_mut(), env.clone(), mock_info("admin", &[]),
-            ExecuteMsg::MintWithMetadata { recipient: "u1".to_string(), token_uri: Some("ipfs://bafybeigdyrzt".to_string()), extension: None }
+            ExecuteMsg::MintWithMetadata { recipient: "user1".to_string(), token_uri: Some("ipfs://bafybeigdyrzt".to_string()), extension: None }
         ).unwrap();
         assert!(res1.attributes.iter().any(|a| a.key == "method" && a.value == "mint_nft_with_metadata"));
 
         // Accepts bare CID -> normalized to ipfs://CID
         let res2 = execute(
             deps.as_mut(), env.clone(), mock_info("admin", &[]),
-            ExecuteMsg::MintWithMetadata { recipient: "u2".to_string(), token_uri: Some("bafybeigdyrztcidonlyvalue_______________________".to_string()), extension: None }
+            ExecuteMsg::MintWithMetadata { recipient: "user2".to_string(), token_uri: Some("bafybeigdyrztcidonlyvalue_______________________".to_string()), extension: None }
         ).unwrap();
         assert!(res2.attributes.iter().any(|a| a.key == "method" && a.value == "mint_nft_with_metadata"));
 
         // Reject http URL by normalizing to None; still mints but without token_uri
         let res3 = execute(
             deps.as_mut(), env, mock_info("admin", &[]),
-            ExecuteMsg::MintWithMetadata { recipient: "u3".to_string(), token_uri: Some("https://example.com/too/long".to_string()), extension: None }
+            ExecuteMsg::MintWithMetadata { recipient: "user3".to_string(), token_uri: Some("https://example.com/too/long".to_string()), extension: None }
         ).unwrap();
         assert!(res3.attributes.iter().any(|a| a.key == "method" && a.value == "mint_nft_with_metadata"));
     }
@@ -487,7 +487,7 @@ mod tests {
         let init_msg = InstantiateMsg { admin: "admin".to_string(), token_name: "TNFT".to_string(), token_symbol: "TN".to_string(), decimals: 0 };
         instantiate(deps.as_mut(), env.clone(), init_info, init_msg).unwrap();
         let start = std::time::Instant::now();
-        let _ = execute(deps.as_mut(), env, mock_info("admin", &[]), ExecuteMsg::Mint { recipient: "u".to_string(), amount: cosmwasm_std::Uint128::new(1) }).unwrap();
+        let _ = execute(deps.as_mut(), env, mock_info("admin", &[]), ExecuteMsg::Mint { recipient: "user".to_string(), amount: cosmwasm_std::Uint128::new(1) }).unwrap();
         assert!(start.elapsed() < std::time::Duration::from_secs(3));
     }
 }

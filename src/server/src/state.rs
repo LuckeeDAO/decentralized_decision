@@ -21,6 +21,11 @@ use crate::core::participants::ParticipantService;
 use crate::core::audit::AuditLogger;
 use crate::core::cache::CacheManager;
 
+// 第六阶段新增组件 - 性能优化
+use crate::core::performance::{PerformanceMonitor, PerformanceBenchmark};
+use crate::core::concurrency::{SmartThreadPool, ThreadPoolConfig, ConcurrencyController};
+use crate::core::stress_testing::StressTester;
+
 use crate::routes::sync::{AuditEvent, StakeRecord, QualStatus};
 use crate::types::StakeEvent;
 
@@ -94,6 +99,18 @@ pub struct ServerState {
     pub(crate) audit_logger: Option<Arc<AuditLogger>>,
     #[allow(dead_code)]
     pub(crate) cache_manager: Option<Arc<CacheManager>>,
+    
+    // 第六阶段新增组件 - 性能优化
+    #[allow(dead_code)]
+    pub(crate) performance_monitor: Arc<PerformanceMonitor>,
+    #[allow(dead_code)]
+    pub(crate) performance_benchmark: Arc<PerformanceBenchmark>,
+    #[allow(dead_code)]
+    pub(crate) thread_pool: Arc<SmartThreadPool>,
+    #[allow(dead_code)]
+    pub(crate) concurrency_controller: Arc<ConcurrencyController>,
+    #[allow(dead_code)]
+    pub(crate) stress_tester: Arc<StressTester>,
 }
 
 impl ServerState {
@@ -139,6 +156,32 @@ impl ServerState {
         let config_manager = ConfigManager::new()
             .map_err(|e| format!("初始化配置管理器失败: {}", e))?;
 
+        // 第六阶段新增组件初始化 - 性能优化
+        let performance_monitor = Arc::new(PerformanceMonitor::new());
+        let participant_service = Arc::new(ParticipantService::new());
+        let session_manager = Arc::new(crate::core::session::SessionManager::new());
+        let performance_benchmark = Arc::new(PerformanceBenchmark::new(
+            session_manager,
+            participant_service,
+        ));
+        
+        // 初始化智能线程池
+        let thread_pool_config = ThreadPoolConfig::default();
+        let thread_pool = Arc::new(SmartThreadPool::new(thread_pool_config));
+        
+        // 初始化并发控制器
+        let max_concurrent = std::env::var("MAX_CONCURRENT_OPERATIONS")
+            .unwrap_or_else(|_| "1000".to_string())
+            .parse::<usize>()
+            .unwrap_or(1000);
+        let concurrency_controller = Arc::new(ConcurrencyController::new(max_concurrent));
+        
+        // 初始化压力测试器
+        let stress_tester = Arc::new(StressTester::new(
+            performance_monitor.clone(),
+            max_concurrent,
+        ));
+
         Ok(ServerState {
             voting_system: Arc::new(RwLock::new(VotingSystem::new())),
             balances: Arc::new(RwLock::new(HashMap::new())),
@@ -177,6 +220,13 @@ impl ServerState {
             participant_service: None,
             audit_logger: None,
             cache_manager: None,
+            
+            // 第六阶段新增组件 - 性能优化
+            performance_monitor,
+            performance_benchmark,
+            thread_pool,
+            concurrency_controller,
+            stress_tester,
         })
     }
 }

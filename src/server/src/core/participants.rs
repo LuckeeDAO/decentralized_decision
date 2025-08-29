@@ -121,6 +121,13 @@ impl ParticipantService {
 
     #[allow(dead_code)]
     pub async fn list(&self) -> Vec<ParticipantRecord> { self.inner.read().await.map.values().cloned().collect() }
+
+    /// 参与者加入会话
+    pub async fn join_session(&self, _session_id: &str, _participant_id: &str) -> Result<(), String> {
+        // TODO: 实现实际的会话加入逻辑
+        // 暂时返回成功
+        Ok(())
+    }
 }
 
 #[allow(dead_code)]

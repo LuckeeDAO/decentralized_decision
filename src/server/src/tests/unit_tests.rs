@@ -8,6 +8,10 @@ use crate::core::lottery_levels::LevelManager;
 use crate::core::lottery_config::ConfigManager;
 use crate::core::selection_algorithms::MultiTargetSelector;
 use crate::core::serial_numbers::{SerialService, SerialPoolConfig};
+use crate::core::performance::{PerformanceMonitor, PerformanceBenchmark};
+use crate::core::concurrency::{SmartThreadPool, ThreadPoolConfig, ConcurrencyController};
+use crate::core::stress_testing::StressTester;
+use crate::core::participants::ParticipantService;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -59,6 +63,20 @@ async fn mk_state() -> Arc<ServerState> {
         participant_service: None,
         audit_logger: None,
         cache_manager: None,
+        
+        // 第六阶段新增组件 - 性能优化
+        performance_monitor: Arc::new(PerformanceMonitor::new()),
+        performance_benchmark: {
+            let participant_service = Arc::new(ParticipantService::new());
+            let session_manager = Arc::new(crate::core::session::SessionManager::new());
+            Arc::new(PerformanceBenchmark::new(session_manager, participant_service))
+        },
+        thread_pool: Arc::new(SmartThreadPool::new(ThreadPoolConfig::default())),
+        concurrency_controller: Arc::new(ConcurrencyController::new(1000)),
+        stress_tester: Arc::new(StressTester::new(
+            Arc::new(PerformanceMonitor::new()),
+            1000,
+        )),
     })
 }
 

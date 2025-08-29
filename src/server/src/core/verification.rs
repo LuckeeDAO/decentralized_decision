@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! 结果验证与证明模块
 //!
 //! - 承诺正确性验证
@@ -15,9 +17,11 @@ pub struct CommitmentProof {
     pub message_hash: String,
 }
 
+#[allow(dead_code)]
 pub struct Verifier;
 
 impl Verifier {
+    #[allow(dead_code)]
     pub fn verify_commitment(proof: &CommitmentProof, message: &[u8], randomness: &[u8]) -> bool {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
@@ -30,6 +34,7 @@ impl Verifier {
         proof.message_hash == msg_hash && proof.commitment == commit
     }
 
+    #[allow(dead_code)]
     pub fn verify_selection(
         results: &HashMap<String, SelectionResult>,
         participants: &[Participant],

@@ -48,9 +48,10 @@ pub async fn run_performance_benchmark(
         participant_service,
     );
     
-    let results = if request.run_full_suite.unwrap_or(false) {
-        benchmark.run_full_benchmark().await
-    } else {
+    let results =         if request.run_full_suite.unwrap_or(false) {
+            let report = benchmark.run_full_benchmark().await;
+            report.results
+        } else {
         // 运行单个规模的测试
         let mut results = Vec::new();
         results.push(benchmark.benchmark_session_creation(participant_count).await);
@@ -121,7 +122,8 @@ pub async fn run_comprehensive_benchmark(
         );
         
         if request.run_full_suite.unwrap_or(false) {
-            benchmark.run_full_benchmark().await
+            let report = benchmark.run_full_benchmark().await;
+            report.results
         } else {
             let participant_count = request.participant_count.unwrap_or(1000);
             let mut results = Vec::new();

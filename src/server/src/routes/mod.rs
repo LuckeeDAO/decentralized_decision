@@ -25,3 +25,6 @@ pub mod benchmark;
 pub mod voting_lifecycle;
 pub mod voting_sdk;
 
+// 第六阶段新增路由模块 - 性能优化
+pub mod performance;
+

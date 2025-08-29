@@ -6,6 +6,7 @@ members = [
     "src/sdk",
     "src/ipfs"
 ]
+resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
@@ -18,7 +19,7 @@ repository = "https://github.com/luckee-dao/decentralized_decision"
 [workspace.dependencies]
 # 核心依赖
 tokio = { version = "1.0", features = ["full"] }
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0"
 anyhow = "1.0"
 thiserror = "1.0"

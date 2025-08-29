@@ -18,3 +18,9 @@ pub mod voting_lifecycle;
 pub mod voting_sdk;
 pub mod storage_strategy;
 pub mod security;
+
+// 第六阶段新增模块 - 性能优化
+pub mod concurrency;
+pub mod stress_testing;
+pub mod iagent;
+pub mod verification;

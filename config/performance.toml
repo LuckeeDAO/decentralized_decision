@@ -1,0 +1,135 @@
+# 性能优化配置文件
+# 第六阶段：性能优化
+
+[performance]
+# 性能监控配置
+monitoring_enabled = true
+metrics_collection_interval_seconds = 60
+performance_report_interval_seconds = 300
+historical_data_retention_hours = 24
+
+# 性能基准配置
+baseline_metrics_enabled = true
+baseline_update_interval_hours = 6
+performance_threshold_warning_percent = 80
+performance_threshold_critical_percent = 95
+
+[cache]
+# 缓存配置
+enabled = true
+backend = "redis"  # 可选: "inmem", "redis", "agent", "disabled"
+ttl_seconds = 300  # 5分钟
+
+# Redis缓存配置
+redis_url = "redis://127.0.0.1:6379"
+redis_pool_size = 10
+redis_connection_timeout_ms = 5000
+redis_read_timeout_ms = 3000
+redis_write_timeout_ms = 3000
+
+# 多层缓存配置
+l1_cache_enabled = true
+l1_cache_ttl_seconds = 60
+l2_cache_enabled = true
+l2_cache_ttl_seconds = 300
+
+# 缓存策略
+cache_prefetch_enabled = true
+cache_invalidation_enabled = true
+cache_compression_enabled = true
+cache_compression_level = 6
+
+[concurrency]
+# 并发处理配置
+max_concurrent_operations = 1000
+max_concurrent_users = 10000
+concurrency_control_enabled = true
+
+# 线程池配置
+thread_pool_min_threads = 4
+thread_pool_max_threads = 32
+thread_pool_queue_capacity = 1000
+thread_pool_keep_alive_ms = 60000
+thread_pool_max_concurrent_tasks = 100
+
+# 任务调度配置
+task_priority_enabled = true
+task_timeout_seconds = 30
+task_retry_count = 3
+task_retry_delay_ms = 1000
+
+# 负载均衡配置
+load_balancing_enabled = true
+load_balancing_strategy = "round_robin"  # 可选: "round_robin", "least_connections", "weighted"
+health_check_interval_seconds = 30
+
+[stress_testing]
+# 压力测试配置
+enabled = true
+default_test_duration_seconds = 300
+default_target_tps = 5000
+default_max_concurrent_users = 10000
+
+# 测试场景配置
+load_test_ramp_up_seconds = 60
+load_test_ramp_down_seconds = 60
+stability_test_duration_hours = 1
+extreme_test_multiplier = 2.0
+
+# 性能阈值配置
+error_threshold_percent = 5.0
+response_time_threshold_ms = 800
+throughput_threshold_tps = 100
+
+[optimization]
+# 性能优化配置
+auto_optimization_enabled = true
+optimization_check_interval_minutes = 15
+optimization_threshold_percent = 10.0
+
+# 算法优化配置
+algorithm_optimization_enabled = true
+memory_optimization_enabled = true
+cache_optimization_enabled = true
+concurrency_optimization_enabled = true
+
+# 编译优化配置
+release_optimization_level = 3
+link_time_optimization = true
+code_generation_units = 1
+panic_abort = true
+
+[monitoring]
+# 监控系统配置
+prometheus_enabled = true
+prometheus_port = 9090
+grafana_enabled = true
+grafana_port = 3000
+
+# 性能指标配置
+cpu_monitoring_enabled = true
+memory_monitoring_enabled = true
+network_monitoring_enabled = true
+disk_monitoring_enabled = true
+
+# 告警配置
+alerting_enabled = true
+alert_threshold_response_time_ms = 1000
+alert_threshold_error_rate_percent = 5.0
+alert_threshold_cpu_percent = 80.0
+alert_threshold_memory_percent = 80.0
+
+[logging]
+# 日志配置
+performance_logging_enabled = true
+log_level = "info"
+log_format = "json"
+log_rotation_enabled = true
+log_rotation_max_size_mb = 100
+log_retention_days = 7
+
+# 性能日志配置
+slow_query_logging_enabled = true
+slow_query_threshold_ms = 1000
+error_logging_enabled = true
+performance_metrics_logging_enabled = true

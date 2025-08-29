@@ -6,6 +6,10 @@ use std::sync::Arc;
 use warp::{Filter, Rejection, Reply};
 use tracing::{info, error};
 use base64::Engine;
+use serde_json::Value as JsonValue;
+use hex as hexutil;
+use std::collections::HashMap;
+use luckee_voting_wasm::types as wasm_types;
 
 /// API请求结构
 #[derive(Debug, Deserialize)]
@@ -33,6 +37,61 @@ pub struct SubmitRevealRequest {
     pub randomness: String,
 }
 
+/// 辅助：BitCommitment -> JSON
+fn bit_commitment_to_json(c: &wasm_types::BitCommitment) -> JsonValue {
+    serde_json::json!({
+        "commitment": hexutil::encode(c.commitment),
+        "opening": hexutil::encode(c.opening),
+        "message_hash": hexutil::encode(c.message_hash),
+    })
+}
+
+/// 辅助：CommitmentProof -> JSON
+fn commitment_proof_to_json(p: &wasm_types::CommitmentProof) -> JsonValue {
+    serde_json::json!({
+        "commitment": hexutil::encode(p.commitment),
+        "opening": hexutil::encode(p.opening),
+        "message": base64::engine::general_purpose::STANDARD.encode(&p.message),
+        "timestamp": p.timestamp,
+    })
+}
+
+/// 辅助：VotingResults -> JSON
+fn voting_results_to_json(r: &wasm_types::VotingResults) -> JsonValue {
+    serde_json::json!({
+        "total_votes": r.total_votes,
+        "valid_votes": r.valid_votes,
+        "invalid_votes": r.invalid_votes,
+        "winner_indices": r.winner_indices,
+        "proof": r.proof,
+    })
+}
+
+/// 辅助：VotingSession -> JSON
+fn voting_session_to_json(s: &wasm_types::VotingSession) -> JsonValue {
+    let commitments: HashMap<String, JsonValue> = s
+        .commitments
+        .iter()
+        .map(|(k, v)| (k.clone(), bit_commitment_to_json(v)))
+        .collect();
+    let reveals: HashMap<String, JsonValue> = s
+        .reveals
+        .iter()
+        .map(|(k, v)| (k.clone(), commitment_proof_to_json(v)))
+        .collect();
+    serde_json::json!({
+        "session_id": s.session_id,
+        "state": format!("{:?}", s.state),
+        "created_at": s.created_at,
+        "commit_deadline": s.commit_deadline,
+        "reveal_deadline": s.reveal_deadline,
+        "participants": s.participants,
+        "commitments": commitments,
+        "reveals": reveals,
+        "results": s.results.as_ref().map(voting_results_to_json),
+    })
+}
+
 /// 创建投票会话
 pub async fn create_session(
     state: Arc<ServerState>,
@@ -48,7 +107,8 @@ pub async fn create_session(
     ) {
         Ok(session) => {
             info!("创建投票会话成功: {}", request.session_id);
-            Ok(warp::reply::json(&ApiResponse::success(session)))
+            let val = voting_session_to_json(&session);
+            Ok(warp::reply::json(&ApiResponse::success(val)))
         }
         Err(e) => {
             error!("创建投票会话失败: {}", e);
@@ -79,7 +139,8 @@ pub async fn submit_commitment(
     ) {
         Ok(commitment) => {
             info!("提交承诺成功: session={}, user={}", request.session_id, request.user_id);
-            Ok(warp::reply::json(&ApiResponse::success(commitment)))
+            let val = bit_commitment_to_json(&commitment);
+            Ok(warp::reply::json(&ApiResponse::success(val)))
         }
         Err(e) => {
             error!("提交承诺失败: {}", e);
@@ -123,7 +184,8 @@ pub async fn submit_reveal(
     ) {
         Ok(proof) => {
             info!("提交揭示成功: session={}, user={}", request.session_id, request.user_id);
-            Ok(warp::reply::json(&ApiResponse::success(proof)))
+            let val = commitment_proof_to_json(&proof);
+            Ok(warp::reply::json(&ApiResponse::success(val)))
         }
         Err(e) => {
             error!("提交揭示失败: {}", e);
@@ -141,7 +203,8 @@ pub async fn get_session(
     
     match voting_system.get_session(&session_id) {
         Some(session) => {
-            Ok(warp::reply::json(&ApiResponse::success(session)))
+            let val = voting_session_to_json(session);
+            Ok(warp::reply::json(&ApiResponse::success(val)))
         }
         None => {
             Ok(warp::reply::json(&ApiResponse::<()>::error("会话未找到".to_string())))
@@ -159,7 +222,8 @@ pub async fn calculate_results(
     match voting_system.calculate_results(&session_id) {
         Ok(results) => {
             info!("计算投票结果成功: {}", session_id);
-            Ok(warp::reply::json(&ApiResponse::success(results)))
+            let val = voting_results_to_json(&results);
+            Ok(warp::reply::json(&ApiResponse::success(val)))
         }
         Err(e) => {
             error!("计算投票结果失败: {}", e);

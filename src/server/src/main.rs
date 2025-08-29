@@ -24,6 +24,9 @@ use crate::routes::{
     levels, voting, sync, tools, cache, nft_state, stake_events, serials, benchmark, voting_lifecycle, voting_sdk
 };
 
+// 第六阶段新增路由模块 - 性能优化
+use crate::routes::performance;
+
 #[cfg(test)]
 mod tests;
 
@@ -55,6 +58,12 @@ fn create_routes(state: Arc<ServerState>) -> impl Filter<Extract = impl warp::Re
     let voting_lifecycle_routes = voting_lifecycle::routes(Arc::clone(&state));
     let voting_sdk_routes = voting_sdk::routes(Arc::clone(&state));
 
+    // 第六阶段新增路由 - 性能优化
+    let performance_routes = performance::performance_routes(
+        Arc::clone(&state.performance_monitor),
+        Arc::clone(&state.performance_benchmark)
+    );
+
     // 组合所有路由
     health_routes
         .or(state_metrics_routes)
@@ -78,6 +87,7 @@ fn create_routes(state: Arc<ServerState>) -> impl Filter<Extract = impl warp::Re
         .or(benchmark_routes)
         .or(voting_lifecycle_routes)
         .or(voting_sdk_routes)
+        .or(performance_routes)
         .boxed()
         .with(warp::cors().allow_any_origin())
         .recover(handle_rejection)
