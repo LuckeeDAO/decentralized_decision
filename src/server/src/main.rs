@@ -21,7 +21,7 @@ use crate::routes::{
     health, state_metrics, ipfs_cache, ipfs_ext, upload, permissions, 
     staking, qualification, nft_types as routes_nft_types, 
     nft_ownership, lottery_config as routes_lottery_config, 
-    levels, voting, sync, tools, cache, nft_state, stake_events, serials, audit
+    levels, voting, sync, tools, cache, nft_state, stake_events, serials, benchmark, voting_lifecycle, voting_sdk
 };
 
 #[cfg(test)]
@@ -49,7 +49,11 @@ fn create_routes(state: Arc<ServerState>) -> impl Filter<Extract = impl warp::Re
     let nft_state_routes = nft_state::routes(Arc::clone(&state));
     let stake_events_routes = stake_events::routes(Arc::clone(&state));
     let serials_routes = serials::routes(Arc::clone(&state));
-    let audit_routes = audit::routes(Arc::clone(&state));
+    let benchmark_routes = benchmark::routes(Arc::clone(&state));
+    
+    // 第五阶段新增路由
+    let voting_lifecycle_routes = voting_lifecycle::routes(Arc::clone(&state));
+    let voting_sdk_routes = voting_sdk::routes(Arc::clone(&state));
 
     // 组合所有路由
     health_routes
@@ -71,7 +75,9 @@ fn create_routes(state: Arc<ServerState>) -> impl Filter<Extract = impl warp::Re
         .or(nft_state_routes)
         .or(stake_events_routes)
         .or(serials_routes)
-        .or(audit_routes)
+        .or(benchmark_routes)
+        .or(voting_lifecycle_routes)
+        .or(voting_sdk_routes)
         .boxed()
         .with(warp::cors().allow_any_origin())
         .recover(handle_rejection)

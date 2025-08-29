@@ -1,4 +1,6 @@
 pub mod basic;
+pub mod phase3_perf;
+pub mod phase5_integration;
 
 // 简单的测试辅助函数
 pub fn create_simple_test_data() -> Vec<i32> {

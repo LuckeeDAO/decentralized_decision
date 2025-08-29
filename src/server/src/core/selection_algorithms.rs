@@ -735,4 +735,47 @@ mod tests {
         assert_eq!(result.winners.len(), k as usize);
         assert!(elapsed.as_secs_f64() < 5.0, "execution took {:?}", elapsed);
     }
+
+    #[test]
+    fn test_multi_target_execution_time_n1000_levels10_under_6s() {
+        let mut mts = MultiTargetSelector::new();
+        // 准备10个等级，均使用随机选择器
+        let mut level_params: HashMap<String, LevelParameters> = HashMap::new();
+        for i in 1..=10 {
+            let lvl = format!("L{}", i);
+            mts.add_selector(lvl.clone(), SelectorFactory::create(&SelectionAlgorithm::Random));
+            level_params.insert(lvl, LevelParameters {
+                min_participants: 100, // 每个等级至少100人
+                max_participants: None,
+                winner_count: 10,
+                selection_algorithm: SelectionAlgorithm::Random,
+                algorithm_params: HashMap::new(),
+                time_limit: None,
+                cost_limit: None,
+            });
+        }
+
+        // 构造1000名参与者，平均分配到10个等级
+        let n = 1000usize;
+        let mut participants: Vec<Participant> = Vec::with_capacity(n);
+        for i in 0..n {
+            let lvl = format!("L{}", (i % 10) + 1);
+            participants.push(Participant {
+                id: (i + 1).to_string(),
+                address: format!("addr{}", i + 1),
+                weight: 1.0,
+                level: lvl,
+                attributes: HashMap::new(),
+                is_winner: false,
+            });
+        }
+
+        let start = std::time::Instant::now();
+        let results = mts.select_multi_target(&participants, &level_params, "seed").unwrap();
+        let elapsed = start.elapsed();
+
+        // 校验每个等级的结果存在，且总用时小于6秒
+        assert_eq!(results.len(), 10);
+        assert!(elapsed.as_secs_f64() < 6.0, "multi-target selection took {:?}", elapsed);
+    }
 }

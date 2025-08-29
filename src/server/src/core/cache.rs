@@ -65,6 +65,7 @@ pub trait InvalidationListener: Send + Sync {
 }
 
 #[allow(dead_code)]
+#[derive(Debug)]
 pub enum CacheBackend {
     InMem,
     Redis,
@@ -97,6 +98,36 @@ pub fn build_cache_from_env<V: Clone + Send + Sync + 'static>() -> Arc<dyn Cache
             eprintln!("[cache] backend not implemented; fallback to in-memory TTL");
             Arc::new(InMemoryTtlCache::new(ttl_secs))
         }
+    }
+}
+
+/// 缓存管理器
+pub struct CacheManager {
+    #[allow(dead_code)]
+    backend: CacheBackend,
+}
+
+impl CacheManager {
+    pub fn new() -> Self {
+        Self {
+            backend: select_backend_from_env(),
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn get_backend(&self) -> &CacheBackend {
+        &self.backend
+    }
+
+    #[allow(dead_code)]
+    pub fn is_enabled(&self) -> bool {
+        !matches!(self.backend, CacheBackend::Disabled)
+    }
+}
+
+impl Default for CacheManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

@@ -12,6 +12,15 @@ use crate::core::lottery_config::ConfigManager;
 use crate::core::selection_algorithms::MultiTargetSelector;
 use crate::core::serial_numbers::{SerialService, SerialPoolConfig};
 
+// 第五阶段组件
+use crate::core::voting_lifecycle::VotingFlowEngine;
+use crate::core::voting_sdk::{VotingSubmitter, VotingVerifier, ResultQueryInterface, CommitmentGenerator};
+use crate::core::security::SecurityProtectionSystem;
+use crate::core::storage_strategy::LayeredStorageSystem;
+use crate::core::participants::ParticipantService;
+use crate::core::audit::AuditLogger;
+use crate::core::cache::CacheManager;
+
 use crate::routes::sync::{AuditEvent, StakeRecord, QualStatus};
 use crate::types::StakeEvent;
 
@@ -68,6 +77,23 @@ pub struct ServerState {
     pub(crate) multi_target_selector: Arc<RwLock<MultiTargetSelector>>,
     // 序号服务
     pub(crate) serials: Arc<RwLock<SerialService>>,
+    
+    // 第五阶段组件
+    pub(crate) voting_flow_engine: Option<Arc<VotingFlowEngine>>,
+    pub(crate) voting_submitter: Option<Arc<VotingSubmitter>>,
+    pub(crate) voting_verifier: Option<Arc<VotingVerifier>>,
+    pub(crate) result_query: Option<Arc<ResultQueryInterface>>,
+    pub(crate) commitment_generator: Option<Arc<CommitmentGenerator>>,
+    #[allow(dead_code)]
+    pub(crate) security_system: Option<Arc<SecurityProtectionSystem>>,
+    #[allow(dead_code)]
+    pub(crate) storage_system: Option<Arc<LayeredStorageSystem>>,
+    #[allow(dead_code)]
+    pub(crate) participant_service: Option<Arc<ParticipantService>>,
+    #[allow(dead_code)]
+    pub(crate) audit_logger: Option<Arc<AuditLogger>>,
+    #[allow(dead_code)]
+    pub(crate) cache_manager: Option<Arc<CacheManager>>,
 }
 
 impl ServerState {
@@ -139,6 +165,18 @@ impl ServerState {
             config_manager: Arc::new(RwLock::new(config_manager)),
             multi_target_selector: Arc::new(RwLock::new(MultiTargetSelector::new())),
             serials: Arc::new(RwLock::new(serials)),
+            
+            // 第五阶段组件
+            voting_flow_engine: None,
+            voting_submitter: None,
+            voting_verifier: None,
+            result_query: None,
+            commitment_generator: None,
+            security_system: None,
+            storage_system: None,
+            participant_service: None,
+            audit_logger: None,
+            cache_manager: None,
         })
     }
 }

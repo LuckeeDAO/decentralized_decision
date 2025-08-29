@@ -3,6 +3,15 @@ use warp::{Rejection, Reply};
 use tracing::error;
 
 use crate::types::ApiResponse;
+use warp::reject::Reject;
+
+#[derive(Debug)]
+pub enum ServerError {
+    ServiceUnavailable,
+    BadRequest,
+}
+
+impl Reject for ServerError {}
 
 pub async fn handle_rejection(err: Rejection) -> Result<impl Reply, Infallible> {
     let (code, message) = if err.is_not_found() {

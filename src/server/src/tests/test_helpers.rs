@@ -55,6 +55,18 @@ pub async fn create_test_state() -> Arc<ServerState> {
                 low_watermark: 0,
             }).await
         )),
+        
+        // 第五阶段组件
+        voting_flow_engine: None,
+        voting_submitter: None,
+        voting_verifier: None,
+        result_query: None,
+        commitment_generator: None,
+        security_system: None,
+        storage_system: None,
+        participant_service: None,
+        audit_logger: None,
+        cache_manager: None,
     })
 }
 
@@ -103,5 +115,17 @@ pub async fn create_test_state_with_config(
                 low_watermark: 0,
             }).await
         )),
+        
+        // 第五阶段组件
+        voting_flow_engine: None,
+        voting_submitter: None,
+        voting_verifier: None,
+        result_query: None,
+        commitment_generator: None,
+        security_system: None,
+        storage_system: None,
+        participant_service: None,
+        audit_logger: None,
+        cache_manager: None,
     })
 }

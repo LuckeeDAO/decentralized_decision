@@ -198,6 +198,18 @@ pub async fn mk_state_min() -> Arc<ServerState> {
         config_manager: Arc::new(RwLock::new(ConfigManager::new().unwrap())),
         multi_target_selector: Arc::new(RwLock::new(MultiTargetSelector::new())),
         serials: Arc::new(RwLock::new(SerialService::new(SerialPoolConfig { pre_generate: 0, serial_hex_len: 16, low_watermark: 0 }).await)),
+        
+        // 第五阶段组件
+        voting_flow_engine: None,
+        voting_submitter: None,
+        voting_verifier: None,
+        result_query: None,
+        commitment_generator: None,
+        security_system: None,
+        storage_system: None,
+        participant_service: None,
+        audit_logger: None,
+        cache_manager: None,
     })
 }
 
